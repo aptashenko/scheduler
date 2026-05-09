@@ -8,7 +8,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { Markup, Telegraf } from 'telegraf';
-import { LogsService } from '../logs/logs.service';
+import { LogsService } from '../app-logs/logs.service';
 import {
   BotSettings,
   EventAnnouncementMode,

@@ -4,7 +4,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { EventsModule } from './modules/events/events.module';
 import { initDatabase } from './database/config';
-import { LogsModule } from './modules/logs/logs.module';
+import { LogsModule } from './modules/app-logs/logs.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { OrganizationsModule } from './modules/organizations/organizations.module';
 import { ParticipantsModule } from './modules/participants/participants.module';

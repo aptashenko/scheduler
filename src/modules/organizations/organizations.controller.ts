@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
-import { LogsService } from '../logs/logs.service';
+import { LogsService } from '../app-logs/logs.service';
 import { TelegramBotService } from '../telegram/telegram-bot.service';
 import { OrganizationsService } from './organizations.service';
 
