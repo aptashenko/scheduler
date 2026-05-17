@@ -7,6 +7,36 @@ type DateMatch = {
   remindAt: Date;
 };
 
+type TimeZoneDateParts = {
+  day: number;
+  hour: number;
+  minute: number;
+  month: number;
+  second: number;
+  year: number;
+};
+
+export function getDefaultTimeZone() {
+  return process.env.DEFAULT_TIMEZONE ?? 'Europe/Paris';
+}
+
+export function dateTimeInDefaultTimeZoneToDate(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+) {
+  return dateTimeInTimeZoneToDate(
+    year,
+    month,
+    day,
+    hour,
+    minute,
+    getDefaultTimeZone(),
+  );
+}
+
 @Injectable()
 export class StrictReminderParserService {
   parse(input: string, now = new Date()): ParsedReminder | null {
@@ -64,9 +94,19 @@ export class StrictReminderParserService {
       : match[1].toLowerCase() === 'завтра'
         ? 1
         : 2;
-    const remindAt = new Date(now);
-    remindAt.setDate(remindAt.getDate() + dayOffset);
-    remindAt.setHours(Number(match[2]), Number(match[3] ?? 0), 0, 0);
+    const nowParts = getTimeZoneDateParts(now, getDefaultTimeZone());
+    const targetDate = new Date(Date.UTC(
+      nowParts.year,
+      nowParts.month - 1,
+      nowParts.day + dayOffset,
+    ));
+    const remindAt = dateTimeInDefaultTimeZoneToDate(
+      targetDate.getUTCFullYear(),
+      targetDate.getUTCMonth() + 1,
+      targetDate.getUTCDate(),
+      Number(match[2]),
+      Number(match[3] ?? 0),
+    );
 
     return this.toDateMatch(match, remindAt);
   }
@@ -79,21 +119,29 @@ export class StrictReminderParserService {
       return null;
     }
 
+    const nowParts = getTimeZoneDateParts(now, getDefaultTimeZone());
     const year = match[3]
       ? this.normalizeYear(Number(match[3]))
-      : now.getFullYear();
-    const remindAt = new Date(
+      : nowParts.year;
+    const remindAt = dateTimeInDefaultTimeZoneToDate(
       year,
-      Number(match[2]) - 1,
+      Number(match[2]),
       Number(match[1]),
       Number(match[4]),
       Number(match[5] ?? 0),
-      0,
-      0,
     );
 
     if (!match[3] && remindAt.getTime() <= now.getTime()) {
-      remindAt.setFullYear(remindAt.getFullYear() + 1);
+      return this.toDateMatch(
+        match,
+        dateTimeInDefaultTimeZoneToDate(
+          year + 1,
+          Number(match[2]),
+          Number(match[1]),
+          Number(match[4]),
+          Number(match[5] ?? 0),
+        ),
+      );
     }
 
     return this.toDateMatch(match, remindAt);
@@ -110,7 +158,13 @@ export class StrictReminderParserService {
     return {
       index: match.index,
       length: match[0].length,
-      remindAt: new Date(`${match[1]}T${match[2].padStart(2, '0')}:${match[3]}:00`),
+      remindAt: dateTimeInDefaultTimeZoneToDate(
+        Number(match[1].slice(0, 4)),
+        Number(match[1].slice(5, 7)),
+        Number(match[1].slice(8, 10)),
+        Number(match[2]),
+        Number(match[3]),
+      ),
     };
   }
 
@@ -137,4 +191,63 @@ export class StrictReminderParserService {
       remindAt,
     };
   }
+}
+
+function dateTimeInTimeZoneToDate(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timeZone: string,
+) {
+  const utcTime = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+  const firstGuess = new Date(utcTime);
+  const firstOffset = getTimeZoneOffset(firstGuess, timeZone);
+  const secondGuess = new Date(utcTime - firstOffset);
+  const secondOffset = getTimeZoneOffset(secondGuess, timeZone);
+
+  return new Date(utcTime - secondOffset);
+}
+
+function getTimeZoneOffset(date: Date, timeZone: string) {
+  const parts = getTimeZoneDateParts(date, timeZone);
+  const timeZoneTime = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+  );
+
+  return timeZoneTime - date.getTime();
+}
+
+function getTimeZoneDateParts(date: Date, timeZone: string): TimeZoneDateParts {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    day: '2-digit',
+    hour: '2-digit',
+    hourCycle: 'h23',
+    minute: '2-digit',
+    month: '2-digit',
+    second: '2-digit',
+    timeZone,
+    year: 'numeric',
+  });
+  const parts = formatter.formatToParts(date);
+  const values = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== 'literal')
+      .map((part) => [part.type, Number(part.value)]),
+  );
+
+  return {
+    day: values.day,
+    hour: values.hour,
+    minute: values.minute,
+    month: values.month,
+    second: values.second,
+    year: values.year,
+  };
 }

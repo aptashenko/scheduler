@@ -3,6 +3,10 @@ import { Context, Markup, Telegraf } from 'telegraf';
 import Calendar from 'telegram-inline-calendar';
 import { ReminderAiService } from '../ai/reminder-ai.service';
 import { ReminderParserService, ReminderParseResult } from '../parser/reminder-parser.service';
+import {
+  dateTimeInDefaultTimeZoneToDate,
+  getDefaultTimeZone,
+} from '../parser/strict-reminder-parser.service';
 import { ReminderStatus } from '../reminders/entities/reminder.entity';
 import { RemindersService } from '../reminders/reminders.service';
 
@@ -442,6 +446,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       hour: '2-digit',
       minute: '2-digit',
       month: '2-digit',
+      timeZone: getDefaultTimeZone(),
       year: 'numeric',
     });
   }
@@ -505,6 +510,19 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   private toIsoDateTime(calendarDateTime: string) {
-    return new Date(calendarDateTime.replace(' ', 'T')).toISOString();
+    const match = calendarDateTime.match(
+      /^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})$/,
+    );
+    if (!match) {
+      return new Date(calendarDateTime.replace(' ', 'T')).toISOString();
+    }
+
+    return dateTimeInDefaultTimeZoneToDate(
+      Number(match[1]),
+      Number(match[2]),
+      Number(match[3]),
+      Number(match[4]),
+      Number(match[5]),
+    ).toISOString();
   }
 }
