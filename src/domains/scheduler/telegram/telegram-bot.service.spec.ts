@@ -151,11 +151,11 @@ describe('TelegramBotService', () => {
   it('sets webhook URL for the requested organization bot', async () => {
     const url = await service.setWebhook(7, 'https://example.com/');
 
-    expect(url).toBe('https://example.com/telegram/webhook/7');
+    expect(url).toBe('https://example.com/scheduler/telegram/webhook/7');
     expect(telegrafInstances).toHaveLength(1);
     expect(telegrafInstances[0].token).toBe('bot-token-7');
     expect(telegrafInstances[0].telegram.setWebhook).toHaveBeenCalledWith(
-      'https://example.com/telegram/webhook/7',
+      'https://example.com/scheduler/telegram/webhook/7',
     );
   });
 

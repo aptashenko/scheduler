@@ -10,8 +10,7 @@ import {
   OrganizationUser,
   OrganizationUserRole,
 } from './entities/organization-user.entity';
-import dotenv from 'dotenv';
-dotenv.config();
+
 @Injectable()
 export class OrganizationsService {
   constructor(

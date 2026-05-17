@@ -1,31 +1,28 @@
 import { Module } from '@nestjs/common';
+import { RouterModule } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { EventsModule } from './modules/events/events.module';
 import { initDatabase } from './database/config';
-import { LogsModule } from './modules/app-logs/logs.module';
-import { NotificationsModule } from './modules/notifications/notifications.module';
-import { OrganizationsModule } from './modules/organizations/organizations.module';
-import { ParticipantsModule } from './modules/participants/participants.module';
-import { SchedulerModule } from './modules/scheduler/scheduler.module';
-import { TelegramModule } from './modules/telegram/telegram.module';
-import { UsersModule } from './modules/users/users.module';
-import { WaitlistModule } from './modules/waitlist/waitlist.module';
+import { ReminderDomainModule } from './domains/reminder/reminder-domain.module';
+import { SchedulerDomainModule } from './domains/scheduler/scheduler-domain.module';
 
 @Module({
   imports: [
     initDatabase(),
     ScheduleModule.forRoot(),
-    LogsModule,
-    OrganizationsModule,
-    NotificationsModule,
-    UsersModule,
-    EventsModule,
-    ParticipantsModule,
-    WaitlistModule,
-    TelegramModule,
-    SchedulerModule,
+    ReminderDomainModule,
+    SchedulerDomainModule,
+    RouterModule.register([
+      {
+        path: 'reminder',
+        module: ReminderDomainModule,
+      },
+      {
+        path: 'scheduler',
+        module: SchedulerDomainModule,
+      },
+    ]),
   ],
   controllers: [AppController],
   providers: [AppService],

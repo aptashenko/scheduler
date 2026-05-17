@@ -63,6 +63,13 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit() {
+    if (process.env.SCHEDULER_TELEGRAM_POLLING !== 'true') {
+      this.logger.log(
+        'Scheduler Telegram polling is disabled. Set SCHEDULER_TELEGRAM_POLLING=true to enable it.',
+      );
+      return;
+    }
+
     const organization = await this.organizationsService.findOrCreateDefault();
     if (!organization) {
       this.logger.warn(
@@ -91,7 +98,7 @@ export class TelegramBotService implements OnModuleInit, OnModuleDestroy {
   async setWebhook(organizationId: number, baseUrl: string) {
     const organization = await this.organizationsService.findOneOrFail(organizationId);
     const bot = await this.getBot(organization);
-    const url = `${baseUrl.replace(/\/$/, '')}/telegram/webhook/${organization.id}`;
+    const url = `${baseUrl.replace(/\/$/, '')}/scheduler/telegram/webhook/${organization.id}`;
     await bot.telegram.setWebhook(url);
     return url;
   }
