@@ -27,4 +27,17 @@ export class UsersService {
   async findUserByUsername(username: string) {
     return this.userRepository.findOneByOrFail({ telegramName: username });
   }
+
+  async getTimeZone(id: string) {
+    const user = await this.findUserById(id);
+    return user.timezone ?? null;
+  }
+
+  async updateTimezone(id: string, timezone: string) {
+    const user = await this.findUserById(id);
+    user.timezone = timezone;
+    await this.userRepository.save(user);
+
+    return user;
+  }
 }

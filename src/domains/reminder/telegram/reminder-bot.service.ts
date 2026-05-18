@@ -26,9 +26,13 @@ type ReminderWizardState =
   | { step: 'awaiting_confirmation'; parsed: ReminderParseResult; text: string }
   | { step: 'awaiting_recipients'; parsed: ReminderParseResult; text: string };
 
-const CREATE_EVENT_LABEL = 'Створити нагадування';
-const VIEW_EVENTS_LABEL = 'Показати всі нагадування';
+const CREATE_EVENT_LABEL = '📝 Створити нагадування';
+const TIME_ZONE_LABEL = '🌍 Виберіть часовий пояс';
+const CHANGE_TIME_ZONE_LABEL = 'Змінити';
+const VIEW_EVENTS_LABEL = '📅 Показати всі нагадування';
 const NEXT_LABEL = 'Пропустити';
+const timeZones = ['Europe/Paris', 'Europe/Kyiv', 'Europe/Warsaw', 'Europe/London', 'America/New_York']
+
 
 @Injectable()
 export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
@@ -153,6 +157,27 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
 
     bot.hears(CREATE_EVENT_LABEL, async (ctx) => {
       await this.startCreateReminder(ctx);
+    });
+
+    bot.hears(TIME_ZONE_LABEL, async (ctx) => {
+      await this.selectTimeZone(ctx)
+    });
+
+    bot.hears(CHANGE_TIME_ZONE_LABEL, async (ctx) => {
+      await this.selectTimeZone(ctx)
+    });
+
+    bot.hears(timeZones, async (ctx) => {
+      await this.usersService.updateTimezone(
+          String(ctx.from.id),
+          ctx.message.text,
+      );
+
+      await ctx.reply(
+          `✅ Часовий пояс збережено: ${ctx.message.text}`,
+      );
+
+      await this.showMainMenu(ctx);
     });
 
     bot.command('create', async (ctx) => {
@@ -286,7 +311,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       }
 
       this.logger.log(`Received reminder message from ${telegramId}`);
-      await ctx.reply(`Ты написал: ${text}`);
+      await ctx.reply(`Невідома команда`);
     });
   }
 
@@ -295,8 +320,25 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async showMainMenu(ctx: Context) {
+    const timezone = await this.usersService.getTimeZone(String(ctx.from!.id));
+    let timeZoneButton = [TIME_ZONE_LABEL];
+    if (timezone) {
+      timeZoneButton[0] = `Часовий пояс: ${timezone}`;
+      timeZoneButton.push(CHANGE_TIME_ZONE_LABEL);
+    }
+
     await ctx.reply('Головне меню',
-      Markup.keyboard([[CREATE_EVENT_LABEL], [VIEW_EVENTS_LABEL]]).resize(),
+        Markup.keyboard([
+          [CREATE_EVENT_LABEL, VIEW_EVENTS_LABEL],
+          timeZoneButton,
+        ]).resize()
+    );
+  }
+
+  private async selectTimeZone(ctx: Context) {
+
+    await ctx.reply('Оберіть часовий пояс',
+      Markup.keyboard(timeZones.map((key) => [key])).resize(),
     );
   }
 
@@ -547,9 +589,17 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       );
 
       this.clearWizardState(ctx.from.id, ctx.chat.id);
+
+      const timezone = await this.usersService.getTimeZone(String(ctx.from!.id));
+      let timeZoneButton = [TIME_ZONE_LABEL];
+      if (timezone) {
+        timeZoneButton[0] = `Часовий пояс: ${timezone}`;
+        timeZoneButton.push(CHANGE_TIME_ZONE_LABEL);
+      }
+
       await ctx.reply(
         'Нагадування успішно створено!',
-        Markup.keyboard([[CREATE_EVENT_LABEL], [VIEW_EVENTS_LABEL]]).resize(),
+        Markup.keyboard([[CREATE_EVENT_LABEL, VIEW_EVENTS_LABEL], timeZoneButton]).resize(),
       );
     } catch (error) {
       this.logger.error('Failed to create reminder with recipients', error);
