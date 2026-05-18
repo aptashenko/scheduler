@@ -5,22 +5,22 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { initDatabase } from './database/config';
 import { ReminderDomainModule } from './domains/reminder/reminder-domain.module';
-import { SchedulerDomainModule } from './domains/scheduler/scheduler-domain.module';
+import { SpeakingClubsDomainModule } from './domains/speaking-clubs/speaking-clubs-domain.module';
 
 @Module({
   imports: [
     initDatabase(),
     ScheduleModule.forRoot(),
     ReminderDomainModule,
-    SchedulerDomainModule,
+    SpeakingClubsDomainModule,
     RouterModule.register([
       {
         path: 'reminder',
         module: ReminderDomainModule,
       },
       {
-        path: 'scheduler',
-        module: SchedulerDomainModule,
+        path: 'speaking-clubs',
+        module: SpeakingClubsDomainModule,
       },
     ]),
   ],

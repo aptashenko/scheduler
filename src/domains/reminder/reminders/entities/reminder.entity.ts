@@ -8,6 +8,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { DATABASE_SCHEMAS } from '../../../../database/schemas';
 import { Users } from './users.entity';
 
 export enum ReminderStatus {
@@ -17,7 +18,7 @@ export enum ReminderStatus {
   Cancelled = 'cancelled',
 }
 
-@Entity('reminders')
+@Entity({ name: 'reminders', schema: DATABASE_SCHEMAS.reminder })
 export class Reminder {
   @PrimaryGeneratedColumn()
   id: number;

@@ -7,9 +7,10 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { DATABASE_SCHEMAS } from '../../../../database/schemas';
 import { Reminder } from './reminder.entity';
 
-@Entity('reminder_users')
+@Entity({ name: 'reminder_users', schema: DATABASE_SCHEMAS.reminder })
 export class Users {
   @PrimaryGeneratedColumn()
   id: number;
