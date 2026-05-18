@@ -7,6 +7,8 @@ export type ParsedReminder = {
   text: string;
 };
 
+type UserTimeZone = { timezone?: string | null };
+
 @Injectable()
 export class ReminderAiService {
   private readonly client?: OpenAI;
@@ -46,13 +48,16 @@ export class ReminderAiService {
     return transcription.text.trim();
   }
 
-  async parseReminder(input: string): Promise<ParsedReminder> {
+  async parseReminder(
+    input: string,
+    user?: UserTimeZone,
+  ): Promise<ParsedReminder> {
     if (!this.client) {
       throw new ServiceUnavailableException('OPENAI_API_KEY is not configured');
     }
 
     const now = new Date();
-    const timezone = getDefaultTimeZone();
+    const timezone = getDefaultTimeZone(user);
     const completion = await this.client.chat.completions.create({
       model: process.env.OPENAI_REMINDER_PARSE_MODEL ?? 'gpt-4o-mini',
       messages: [

@@ -247,9 +247,10 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
           return;
         }
 
+        const timeZone = await this.getChatTimeZone(String(ctx.from.id));
         const parsed = {
           parsed: {
-            remindAt: this.toIsoDateTime(selectedDate),
+            remindAt: this.toIsoDateTime(selectedDate, timeZone),
             source: 'strict',
             text: state.text,
           },
@@ -379,7 +380,10 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const parsed = await this.reminderParserService.parse(input);
+    const timeZone = await this.getChatTimeZone(String(ctx.from.id));
+    const parsed = await this.reminderParserService.parse(input, {
+      timezone: timeZone,
+    });
     if (!parsed.remindAt) {
       this.setWizardState(ctx.from.id, ctx.chat.id, {
         step: 'awaiting_datetime',
@@ -515,12 +519,17 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    const timeZone =
+      ctx.from !== undefined
+        ? await this.getChatTimeZone(String(ctx.from.id))
+        : getDefaultTimeZone();
+
     await ctx.reply(
       [
         'Підтвердіть нагадування',
         '',
         `Текст: ${parsed.text}`,
-        `Коли: ${this.formatDateTime(new Date(parsed.remindAt))}`,
+        `Коли: ${this.formatDateTime(new Date(parsed.remindAt), timeZone)}`,
       ].join('\n'),
       Markup.inlineKeyboard([
         [
@@ -855,10 +864,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       this.formatDateTime(reminder.remindAt, timeZone),
       '',
       `👥 <b>Учасники</b>`,
-      formattedUsers,
-      '',
-      `📌 <b>Статус</b>`,
-      this.formatReminderStatus(reminder.status),
+      formattedUsers
     ];
     return message.join('\n');
   }
@@ -950,7 +956,10 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
     return `${chatId}:${userId}`;
   }
 
-  private toIsoDateTime(calendarDateTime: string) {
+  private toIsoDateTime(
+    calendarDateTime: string,
+    timeZone = getDefaultTimeZone(),
+  ) {
     const match = calendarDateTime.match(
       /^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})$/,
     );
@@ -964,6 +973,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       Number(match[3]),
       Number(match[4]),
       Number(match[5]),
+      { timezone: timeZone },
     ).toISOString();
   }
 }

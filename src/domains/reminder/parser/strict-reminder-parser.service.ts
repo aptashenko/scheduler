@@ -16,6 +16,8 @@ type TimeZoneDateParts = {
   year: number;
 };
 
+type UserTimeZone = { timezone?: string | null };
+
 export function getDefaultTimeZone(user?: { timezone?: string | null }) {
   if (user?.timezone) {
     return user.timezone;
@@ -43,7 +45,11 @@ export function dateTimeInDefaultTimeZoneToDate(
 
 @Injectable()
 export class StrictReminderParserService {
-  parse(input: string, now = new Date()): ParsedReminder | null {
+  parse(
+    input: string,
+    now = new Date(),
+    user?: UserTimeZone,
+  ): ParsedReminder | null {
     const normalized = input.trim().replace(/\s+/g, ' ');
     if (!normalized) {
       return null;
@@ -51,9 +57,9 @@ export class StrictReminderParserService {
 
     const match =
       this.parseRelative(normalized, now) ??
-      this.parseTodayTomorrow(normalized, now) ??
-      this.parseNumericDate(normalized, now) ??
-      this.parseIsoDate(normalized);
+      this.parseTodayTomorrow(normalized, now, user) ??
+      this.parseNumericDate(normalized, now, user) ??
+      this.parseIsoDate(normalized, user);
 
     if (!match || match.remindAt.getTime() <= now.getTime()) {
       return null;
@@ -85,7 +91,11 @@ export class StrictReminderParserService {
     return this.toDateMatch(match, remindAt);
   }
 
-  private parseTodayTomorrow(input: string, now: Date): DateMatch | null {
+  private parseTodayTomorrow(
+    input: string,
+    now: Date,
+    user?: UserTimeZone,
+  ): DateMatch | null {
     const match = input.match(
       /(?:^|\s)(сегодня|завтра|послезавтра)\s+(?:в\s+)?(\d{1,2})(?::(\d{2}))?(?=\s|$)/i,
     );
@@ -99,7 +109,7 @@ export class StrictReminderParserService {
         : match[1].toLowerCase() === 'завтра'
           ? 1
           : 2;
-    const nowParts = getTimeZoneDateParts(now, getDefaultTimeZone());
+    const nowParts = getTimeZoneDateParts(now, getDefaultTimeZone(user));
     const targetDate = new Date(
       Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day + dayOffset),
     );
@@ -109,12 +119,17 @@ export class StrictReminderParserService {
       targetDate.getUTCDate(),
       Number(match[2]),
       Number(match[3] ?? 0),
+      user,
     );
 
     return this.toDateMatch(match, remindAt);
   }
 
-  private parseNumericDate(input: string, now: Date): DateMatch | null {
+  private parseNumericDate(
+    input: string,
+    now: Date,
+    user?: UserTimeZone,
+  ): DateMatch | null {
     const match = input.match(
       /(?:^|\s)(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?\s+(?:в\s+)?(\d{1,2})(?::(\d{2}))?(?=\s|$)/i,
     );
@@ -122,7 +137,7 @@ export class StrictReminderParserService {
       return null;
     }
 
-    const nowParts = getTimeZoneDateParts(now, getDefaultTimeZone());
+    const nowParts = getTimeZoneDateParts(now, getDefaultTimeZone(user));
     const year = match[3]
       ? this.normalizeYear(Number(match[3]))
       : nowParts.year;
@@ -132,6 +147,7 @@ export class StrictReminderParserService {
       Number(match[1]),
       Number(match[4]),
       Number(match[5] ?? 0),
+      user,
     );
 
     if (!match[3] && remindAt.getTime() <= now.getTime()) {
@@ -143,6 +159,7 @@ export class StrictReminderParserService {
           Number(match[1]),
           Number(match[4]),
           Number(match[5] ?? 0),
+          user,
         ),
       );
     }
@@ -150,7 +167,7 @@ export class StrictReminderParserService {
     return this.toDateMatch(match, remindAt);
   }
 
-  private parseIsoDate(input: string): DateMatch | null {
+  private parseIsoDate(input: string, user?: UserTimeZone): DateMatch | null {
     const match = input.match(
       /\b(\d{4}-\d{2}-\d{2})(?:[ T])(\d{1,2}):(\d{2})\b/,
     );
@@ -167,6 +184,7 @@ export class StrictReminderParserService {
         Number(match[1].slice(8, 10)),
         Number(match[2]),
         Number(match[3]),
+        user,
       ),
     };
   }

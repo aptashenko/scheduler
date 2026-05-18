@@ -67,4 +67,17 @@ describe('StrictReminderParserService', () => {
       text: 'Протестировать',
     });
   });
+
+  it('parses ISO-like date time in user timezone', () => {
+    const result = service.parse(
+      'Протестировать 2026-05-17 09:00',
+      new Date('2026-05-17T06:00:00Z'),
+      { timezone: 'Europe/Paris' },
+    );
+
+    expect(result).toEqual({
+      remindAt: new Date('2026-05-17T09:00:00+02:00').toISOString(),
+      text: 'Протестировать',
+    });
+  });
 });
