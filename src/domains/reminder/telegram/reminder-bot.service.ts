@@ -26,11 +26,11 @@ type ReminderWizardState =
   | { step: 'awaiting_confirmation'; parsed: ReminderParseResult; text: string }
   | { step: 'awaiting_recipients'; parsed: ReminderParseResult; text: string };
 
-const CREATE_EVENT_LABEL = '📝 Створити нагадування';
-const TIME_ZONE_LABEL = '🌍 Виберіть часовий пояс';
-const CHANGE_TIME_ZONE_LABEL = 'Змінити';
-const VIEW_EVENTS_LABEL = '📅 Показати всі нагадування';
-const NEXT_LABEL = 'Пропустити';
+const CREATE_EVENT_LABEL = '📝 Create new';
+const TIME_ZONE_LABEL = '🌍 Select timezone';
+const CHANGE_TIME_ZONE_LABEL = 'Change';
+const VIEW_EVENTS_LABEL = '📅 Show all';
+const NEXT_LABEL = 'Only me';
 const timeZones = ['Europe/Paris', 'Europe/Kyiv', 'Europe/Warsaw', 'Europe/London', 'America/New_York']
 
 
@@ -116,7 +116,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
 
     await this.bot.telegram.sendMessage(
       telegramChatId,
-      [`Напоминание`, '', text].join('\n'),
+      [`Reminder`, '', text].join('\n'),
     );
   }
 
@@ -134,7 +134,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
     const calendar = new Calendar(bot, {
       bot_api: 'telegraf',
       close_calendar: true,
-      custom_start_msg: 'Виберіть дату і час',
+      custom_start_msg: 'Choose date and time',
       date_format: 'YYYY-MM-DD HH:mm',
       language: 'ru',
       start_date: 'now',
@@ -174,7 +174,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       );
 
       await ctx.reply(
-          `✅ Часовий пояс збережено: ${ctx.message.text}`,
+          `✅ Timezone saved: ${ctx.message.text}`,
       );
 
       await this.showMainMenu(ctx);
@@ -243,7 +243,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
         const state = this.getWizardState(ctx.from.id, query.message.chat.id);
 
         if (state?.step !== 'awaiting_datetime') {
-          await ctx.reply(`Выбраны дата и время: ${selectedDate}`);
+          await ctx.reply(`Selected datetime: ${selectedDate}`);
           return;
         }
 
@@ -273,7 +273,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       }
 
       if (!this.reminderAiService.isConfigured()) {
-        await ctx.reply('Голосовое создание требует OPENAI_API_KEY в .env.');
+        await ctx.reply('AI is not configured yet');
         return;
       }
 
@@ -287,7 +287,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       } catch (error) {
         this.logger.error('Failed to create reminder from voice', error);
         await ctx.reply(
-          'Не удалось распознать голосовое сообщение. Попробуйте текстом.',
+          'Voice massage is failed. Try again',
         );
       }
     });
@@ -302,7 +302,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
         return;
       }
       if (state?.step === 'awaiting_datetime') {
-        await ctx.reply('Выберите дату и время в календаре.');
+        await ctx.reply('Choose date and time in calendar.');
         calendar.startNavCalendar(ctx.message);
         return;
       }
@@ -312,7 +312,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       }
 
       this.logger.log(`Received reminder message from ${telegramId}`);
-      await ctx.reply(`Невідома команда`);
+      await ctx.reply(`Unknown command`);
     });
   }
 
@@ -324,11 +324,11 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
     const timezone = await this.usersService.getTimeZone(String(ctx.from!.id));
     let timeZoneButton = [TIME_ZONE_LABEL];
     if (timezone) {
-      timeZoneButton[0] = `Часовий пояс: ${timezone}`;
+      timeZoneButton[0] = `Timezone: ${timezone}`;
       timeZoneButton.push(CHANGE_TIME_ZONE_LABEL);
     }
 
-    await ctx.reply('Головне меню',
+    await ctx.reply('Main menu',
         Markup.keyboard([
           [CREATE_EVENT_LABEL, VIEW_EVENTS_LABEL],
           timeZoneButton,
@@ -338,7 +338,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
 
   private async selectTimeZone(ctx: Context) {
 
-    await ctx.reply('Оберіть часовий пояс',
+    await ctx.reply('Select timezone',
       Markup.keyboard(timeZones.map((key) => [key])).resize(),
     );
   }
@@ -351,10 +351,10 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
     this.setWizardState(ctx.from.id, ctx.chat.id, { step: 'awaiting_text' });
     await ctx.reply(
       [
-        'Створення нагадування',
+        'Create reminder',
         '',
-        'Напишіть або відправте голосом, про що і коли треба нагадати.',
-        'Наприклад: Подзвонити лікарю завтра о 14:00',
+        'Tell me what and when to remind you. You can send text or voice messages.',
+        'Example: Call the doctor tomorrow at 14:00',
       ].join('\n'),
     );
   }
@@ -374,8 +374,8 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
         text: input,
       });
       await ctx.reply(
-        'Я не зміг розпізнати дату. Виберіть дату і час будь-ласка вручну.',
-      );
+          'I could not recognize the date. Please select the date and time manually.',
+          );
       calendar.startNavCalendar(ctx.message);
       return;
     }
@@ -390,8 +390,8 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
         text: parsed.text || input,
       });
       await ctx.reply(
-        'Я не зміг розпізнати дату. Виберіть дату і час будь-ласка вручну.',
-      );
+          'I could not recognize the date. Please select the date and time manually.',
+          );
       calendar.startNavCalendar(ctx.message);
       return;
     }
@@ -423,17 +423,17 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
     if (dates.length === 0) {
       await ctx.reply(
         [
-          'Нагадувань ще немає.',
+          'No reminders yet.',
           '',
-          `Натисність "${CREATE_EVENT_LABEL}", щоб додати перше.`,
+          `Tap "${CREATE_EVENT_LABEL}" to add your first reminder.`,
         ].join('\n'),
       );
       return;
     }
 
     await ctx.reply(
-      'Виберіть дату, за яку показати нагадування.',
-      Markup.inlineKeyboard(
+        'Choose a date for which to show reminders.',
+        Markup.inlineKeyboard(
         dates.map((date) => [
           Markup.button.callback(
             this.formatDateOnly(date.date, timeZone),
@@ -471,16 +471,16 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
     if (reminders.length === 0) {
       await ctx.reply(
         [
-          'На вибрану дату нагадувань немає.',
+          'No reminders found for this date.',
           '',
-          `Дата: ${this.formatDateOnly(targetDate, timeZone)}`,
+          `Date: ${this.formatDateOnly(targetDate, timeZone)}`,
         ].join('\n'),
       );
       return;
     }
 
     await ctx.reply(
-      `<b>Напоминания на ${this.formatDateOnly(targetDate, timeZone)}</b>`,
+      `<b>Reminders for ${this.formatDateOnly(targetDate, timeZone)}</b>`,
       {
         parse_mode: 'HTML',
       },
@@ -491,7 +491,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
         parse_mode: 'HTML',
         ...Markup.inlineKeyboard([
           Markup.button.callback(
-            '🗑️ Видалити',
+            '🗑️ Delete',
             `delete_reminder:${reminder.id}`,
           ),
         ]),
@@ -502,10 +502,10 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
   private async addUsers(ctx: Context) {
     await ctx.reply(
       [
-        'З ким поділитись нагадуванням?',
+        'Share reminder',
         '',
-        'Напишіть Telegram користувачів через кому.',
-        'Наприклад: @userА, @userВ',
+        'Enter Telegram usernames separated by commas.',
+        'Example: @userA, @userB',
       ].join('\n'),
       Markup.keyboard([[NEXT_LABEL]]).resize(),
     );
@@ -526,15 +526,15 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
 
     await ctx.reply(
       [
-        'Підтвердіть нагадування',
+        'Confirm reminder',
         '',
-        `Текст: ${parsed.text}`,
-        `Коли: ${this.formatDateTime(new Date(parsed.remindAt), timeZone)}`,
+        `Reminder: ${parsed.text}`,
+        `Time: ${this.formatDateTime(new Date(parsed.remindAt), timeZone)}`,
       ].join('\n'),
       Markup.inlineKeyboard([
         [
-          Markup.button.callback('Підтвердити', 'confirm_reminder'),
-          Markup.button.callback('Змінити дату', 'change_reminder_date'),
+          Markup.button.callback('Confirm', 'confirm_reminder'),
+          Markup.button.callback('Change date', 'change_reminder_date'),
         ],
       ]),
     );
@@ -547,7 +547,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
 
     const state = this.getWizardState(ctx.from.id, chatId);
     if (state?.step !== 'awaiting_confirmation' || !state.parsed.remindAt) {
-      await ctx.answerCbQuery('Нагадування не знайдено');
+      await ctx.answerCbQuery('Reminder not found');
       return;
     }
 
@@ -570,7 +570,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
   ) {
     const state = this.getWizardState(ctx.from.id, ctx.chat.id);
     if (state?.step !== 'awaiting_recipients' || !state.parsed.remindAt) {
-      await ctx.reply('Нагадування не знайдено');
+      await ctx.answerCbQuery('Reminder not found');
       return;
     }
     const recipients = await this.resolveRecipientChatIds(
@@ -579,7 +579,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
     );
     if (!recipients.ok) {
       await ctx.reply(
-        `Користувач ${recipients.missingUsername} у нас не зареєстрований`,
+          `User ${recipients.missingUsername} has not registered yet`
       );
       return;
     }
@@ -602,17 +602,17 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       const timezone = await this.usersService.getTimeZone(String(ctx.from!.id));
       let timeZoneButton = [TIME_ZONE_LABEL];
       if (timezone) {
-        timeZoneButton[0] = `Часовий пояс: ${timezone}`;
+        timeZoneButton[0] = `Timezone: ${timezone}`;
         timeZoneButton.push(CHANGE_TIME_ZONE_LABEL);
       }
 
       await ctx.reply(
-        'Нагадування успішно створено!',
-        Markup.keyboard([[CREATE_EVENT_LABEL, VIEW_EVENTS_LABEL], timeZoneButton]).resize(),
+          'Reminder created!',
+          Markup.keyboard([[CREATE_EVENT_LABEL, VIEW_EVENTS_LABEL], timeZoneButton]).resize(),
       );
     } catch (error) {
       this.logger.error('Failed to create reminder with recipients', error);
-      await ctx.reply('Не вдалось створити нагадування');
+      await ctx.reply('Could not create the reminder');
     }
   }
 
@@ -691,7 +691,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
     await this.bot.telegram.sendMessage(
       telegramChatId,
       [
-        'Вас додали до нагадування',
+        'You were added to a shared reminder',
         '',
         await this.formatReminderCard(reminder, timeZone),
       ].join('\n'),
@@ -699,7 +699,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
         parse_mode: 'HTML',
         ...Markup.inlineKeyboard([
           Markup.button.callback(
-            '🗑️ Видалити',
+            '🗑️ Delete',
             `delete_reminder:${reminder.id}`,
           ),
         ]),
@@ -736,7 +736,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       state?.step !== 'awaiting_confirmation' &&
       state?.step !== 'awaiting_recipients'
     ) {
-      await ctx.answerCbQuery('Нагадування не знайдено');
+      await ctx.answerCbQuery('This reminder was not found');
       return;
     }
 
@@ -745,16 +745,16 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       text: state.text,
     });
     await ctx.answerCbQuery();
-    await ctx.reply('Виберіть дату і час в календарі.');
+    await ctx.reply('Choose a date and time from the calendar.');
     calendar.startNavCalendar({ chat: { id: chatId } });
   }
 
   private formatReminderStatus(status: string) {
     const labels: Record<string, string> = {
-      cancelled: '⚪ відмінено',
-      failed: '🔴 помилка',
-      pending: '🟡 очікує...',
-      sent: '🔵 відправлено',
+      cancelled: '⚪ cancelled',
+      failed: '🔴 error',
+      pending: '🟡 waiting...',
+      sent: '🔵 sent',
     };
 
     return labels[status] ?? status;
@@ -852,18 +852,18 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
     const formattedUsers =
       users.length > 0
         ? users.map((user) => this.escapeHtml(user)).join(', ')
-        : 'тільки вы';
+        : 'only you';
 
     const message = [
-      `<b>Нагадування #${reminder.id}</b>`,
+      `<b>Reminder #${reminder.id}</b>`,
       '',
-      `📝 <b>Текст</b>`,
+      `📝 <b>Text</b>`,
       this.escapeHtml(reminder.text),
       '',
-      `🕒 <b>Коли</b>`,
+      `🕒 <b>When</b>`,
       this.formatDateTime(reminder.remindAt, timeZone),
       '',
-      `👥 <b>Учасники</b>`,
+      `👥 <b>Participants</b>`,
       formattedUsers
     ];
     return message.join('\n');
@@ -876,13 +876,13 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
   ) {
     const reminderId = Number(callbackData.replace('delete_reminder:', ''));
     if (!Number.isInteger(reminderId)) {
-      await ctx.answerCbQuery('Некорректне нагадування');
+      await ctx.answerCbQuery('Invalid reminder data');
       return;
     }
 
     const reminder = await this.remindersService.findOne(reminderId);
     if (!reminder.telegramChatIds.includes(String(chatId))) {
-      await ctx.answerCbQuery('Це нагадування недоступне');
+      await ctx.answerCbQuery('This reminder is unavailable');
       return;
     }
 
@@ -890,17 +890,17 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       reminderId,
       String(chatId),
     );
-    await ctx.answerCbQuery('Нагадування видалене з вашего списку');
+    await ctx.answerCbQuery('Reminder removed from your list');
 
     if ('editMessageText' in ctx) {
       await ctx.editMessageText(
         [
           `<b>#${reminder.id}</b>`,
-          `Текст: ${this.escapeHtml(reminder.text)}`,
+          `Text: ${this.escapeHtml(reminder.text)}`,
           '',
           updatedReminder.status === ReminderStatus.Cancelled
-            ? 'Нагадування відмінено.'
-            : 'Нагадування видалено з вашего списку.',
+            ? 'Reminder cancelled.'
+            : 'Reminder removed from your list.',
         ].join('\n'),
         { parse_mode: 'HTML' },
       );
