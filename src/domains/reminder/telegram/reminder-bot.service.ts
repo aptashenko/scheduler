@@ -295,8 +295,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async showMainMenu(ctx: Context) {
-    await ctx.reply(
-      ['Главное меню', '', 'Выберите действие.'].join('\n'),
+    await ctx.reply('Головне меню',
       Markup.keyboard([[CREATE_EVENT_LABEL], [VIEW_EVENTS_LABEL]]).resize(),
     );
   }
