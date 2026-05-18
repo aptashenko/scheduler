@@ -33,7 +33,7 @@ export class RemindersService implements OnModuleDestroy {
     const reminder = await this.remindersRepository.save(
       this.remindersRepository.create({
         userId: createReminderDto.userId,
-        telegramChatId: createReminderDto.telegramChatId,
+        telegramChatIds: createReminderDto.telegramChatIds,
         text: createReminderDto.text,
         remindAt: this.parseRemindAt(createReminderDto.remindAt),
         status: ReminderStatus.Pending,
@@ -64,8 +64,8 @@ export class RemindersService implements OnModuleDestroy {
     if (updateReminderDto.userId !== undefined) {
       reminder.userId = updateReminderDto.userId;
     }
-    if (updateReminderDto.telegramChatId !== undefined) {
-      reminder.telegramChatId = updateReminderDto.telegramChatId;
+    if (updateReminderDto.telegramChatIds !== undefined) {
+      reminder.telegramChatIds = updateReminderDto.telegramChatIds;
     }
     if (updateReminderDto.text !== undefined) {
       reminder.text = updateReminderDto.text;
@@ -98,6 +98,25 @@ export class RemindersService implements OnModuleDestroy {
     await this.removeJob(reminder.bullJobId);
     reminder.status = ReminderStatus.Cancelled;
     reminder.bullJobId = null;
+    return this.remindersRepository.save(reminder);
+  }
+
+  async detachChatId(id: number, telegramChatId: string) {
+    const reminder = await this.findOne(id);
+    if (!reminder.telegramChatIds.includes(telegramChatId)) {
+      return reminder;
+    }
+
+    reminder.telegramChatIds = reminder.telegramChatIds.filter(
+      (chatId) => chatId !== telegramChatId,
+    );
+
+    if (reminder.telegramChatIds.length === 0) {
+      await this.removeJob(reminder.bullJobId);
+      reminder.status = ReminderStatus.Cancelled;
+      reminder.bullJobId = null;
+    }
+
     return this.remindersRepository.save(reminder);
   }
 
@@ -151,10 +170,10 @@ export class RemindersService implements OnModuleDestroy {
   }
 
   private assertCreateDto(createReminderDto: CreateReminderDto) {
-    if (!Number.isInteger(createReminderDto.userId)) {
-      throw new BadRequestException('userId must be an integer');
+    if (!createReminderDto.userId) {
+      throw new BadRequestException('userId is required');
     }
-    if (!createReminderDto.telegramChatId) {
+    if (!createReminderDto.telegramChatIds.length) {
       throw new BadRequestException('telegramChatId is required');
     }
     if (!createReminderDto.text?.trim()) {

@@ -64,10 +64,9 @@ export class RemindersWorker implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      await this.reminderBotService.sendMessage(
-        reminder.telegramChatId,
-        reminder.text,
-      );
+      for (const telegramChatId of reminder.telegramChatIds) {
+        await this.reminderBotService.sendMessage(telegramChatId, reminder.text);
+      }
 
       reminder.status = ReminderStatus.Sent;
       reminder.sentAt = new Date();

@@ -4,22 +4,27 @@ import { ReminderAiService } from './ai/reminder-ai.service';
 import { ReminderParserService } from './parser/reminder-parser.service';
 import { StrictReminderParserService } from './parser/strict-reminder-parser.service';
 import { Reminder } from './reminders/entities/reminder.entity';
+import { Users } from './reminders/entities/users.entity';
+import { ReminderDailySummaryService } from './reminders/reminder-daily-summary.service';
 import { reminderQueueProvider } from './reminders/reminder-queue.provider';
 import { RemindersController } from './reminders/reminders.controller';
 import { RemindersService } from './reminders/reminders.service';
 import { RemindersWorker } from './reminders/reminders.worker';
+import { UsersService } from './reminders/users.service';
 import { ReminderTelegramController } from './telegram/reminder-telegram.controller';
 import { ReminderBotService } from './telegram/reminder-bot.service';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Reminder])],
+  imports: [TypeOrmModule.forFeature([Reminder, Users])],
   controllers: [ReminderTelegramController, RemindersController],
   providers: [
     reminderQueueProvider,
     ReminderAiService,
+    ReminderDailySummaryService,
     ReminderParserService,
     ReminderBotService,
     RemindersService,
+    UsersService,
     RemindersWorker,
     StrictReminderParserService,
   ],

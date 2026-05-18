@@ -1,6 +1,6 @@
 export class CreateReminderDto {
-  userId: number;
-  telegramChatId: string;
+  userId: string;
+  telegramChatIds: string[];
   text: string;
   remindAt: string;
 }

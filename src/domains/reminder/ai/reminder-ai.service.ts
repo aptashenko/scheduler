@@ -1,5 +1,6 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import OpenAI, { toFile } from 'openai';
+import { getDefaultTimeZone } from '../parser/strict-reminder-parser.service';
 
 export type ParsedReminder = {
   remindAt: string | null;
@@ -29,7 +30,9 @@ export class ReminderAiService {
 
     const response = await fetch(fileUrl);
     if (!response.ok) {
-      throw new ServiceUnavailableException('Failed to download Telegram voice file');
+      throw new ServiceUnavailableException(
+        'Failed to download Telegram voice file',
+      );
     }
 
     const audio = Buffer.from(await response.arrayBuffer());
@@ -49,7 +52,7 @@ export class ReminderAiService {
     }
 
     const now = new Date();
-    const timezone = process.env.DEFAULT_TIMEZONE ?? 'Europe/Paris';
+    const timezone = getDefaultTimeZone();
     const completion = await this.client.chat.completions.create({
       model: process.env.OPENAI_REMINDER_PARSE_MODEL ?? 'gpt-4o-mini',
       messages: [

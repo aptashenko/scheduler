@@ -1,8 +1,8 @@
 import { ReminderStatus } from '../entities/reminder.entity';
 
 export class UpdateReminderDto {
-  userId?: number;
-  telegramChatId?: string;
+  userId?: string;
+  telegramChatIds?: string[];
   text?: string;
   remindAt?: string;
   status?: ReminderStatus;

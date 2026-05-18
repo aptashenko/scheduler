@@ -3,9 +3,12 @@ import {
   CreateDateColumn,
   Entity,
   Index,
+  JoinColumn,
+  ManyToOne,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { Users } from './users.entity';
 
 export enum ReminderStatus {
   Pending = 'pending',
@@ -20,12 +23,12 @@ export class Reminder {
   id: number;
 
   @Index()
-  @Column({ name: 'user_id', type: 'int' })
-  userId: number;
+  @Column({ name: 'user_id', type: 'bigint' })
+  userId: string;
 
   @Index()
-  @Column({ name: 'telegram_chat_id', type: 'varchar', length: 64 })
-  telegramChatId: string;
+  @Column({ name: 'telegram_chat_ids', type: 'text', array: true })
+  telegramChatIds: string[];
 
   @Column({ type: 'text' })
   text: string;
@@ -44,6 +47,12 @@ export class Reminder {
 
   @Column({ name: 'bull_job_id', type: 'varchar', length: 128, nullable: true })
   bullJobId: string | null;
+
+  @ManyToOne(() => Users, (user) => user.reminders, {
+    createForeignKeyConstraints: false,
+  })
+  @JoinColumn({ name: 'user_id', referencedColumnName: 'telegramId' })
+  user: Users;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

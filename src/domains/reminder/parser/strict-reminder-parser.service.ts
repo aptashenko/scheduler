@@ -16,7 +16,10 @@ type TimeZoneDateParts = {
   year: number;
 };
 
-export function getDefaultTimeZone() {
+export function getDefaultTimeZone(user?: { timezone?: string | null }) {
+  if (user?.timezone) {
+    return user.timezone;
+  }
   return process.env.DEFAULT_TIMEZONE ?? 'Europe/Paris';
 }
 
@@ -26,6 +29,7 @@ export function dateTimeInDefaultTimeZoneToDate(
   day: number,
   hour: number,
   minute: number,
+  user?: { timezone?: string | null },
 ) {
   return dateTimeInTimeZoneToDate(
     year,
@@ -33,7 +37,7 @@ export function dateTimeInDefaultTimeZoneToDate(
     day,
     hour,
     minute,
-    getDefaultTimeZone(),
+    getDefaultTimeZone(user),
   );
 }
 
@@ -89,17 +93,16 @@ export class StrictReminderParserService {
       return null;
     }
 
-    const dayOffset = match[1].toLowerCase() === 'сегодня'
-      ? 0
-      : match[1].toLowerCase() === 'завтра'
-        ? 1
-        : 2;
+    const dayOffset =
+      match[1].toLowerCase() === 'сегодня'
+        ? 0
+        : match[1].toLowerCase() === 'завтра'
+          ? 1
+          : 2;
     const nowParts = getTimeZoneDateParts(now, getDefaultTimeZone());
-    const targetDate = new Date(Date.UTC(
-      nowParts.year,
-      nowParts.month - 1,
-      nowParts.day + dayOffset,
-    ));
+    const targetDate = new Date(
+      Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day + dayOffset),
+    );
     const remindAt = dateTimeInDefaultTimeZoneToDate(
       targetDate.getUTCFullYear(),
       targetDate.getUTCMonth() + 1,
@@ -183,7 +186,8 @@ export class StrictReminderParserService {
 
   private toDateMatch(match: RegExpMatchArray, remindAt: Date): DateMatch {
     const matchedText = match[0];
-    const leadingWhitespace = matchedText.length - matchedText.trimStart().length;
+    const leadingWhitespace =
+      matchedText.length - matchedText.trimStart().length;
 
     return {
       index: (match.index ?? 0) + leadingWhitespace,
