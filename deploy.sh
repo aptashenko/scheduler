@@ -59,6 +59,32 @@ ssh "$HOST" \
   "APP_DIR='$APP_DIR' PM2_APP='$PM2_APP' BRANCH='$BRANCH' BASE_URL='$BASE_URL' RESET_SPEAKING_CLUBS_DB='$RESET_SPEAKING_CLUBS_DB' RESET_REMINDER_DB='$RESET_REMINDER_DB' bash -s" <<'REMOTE'
 set -euo pipefail
 
+show_logs_and_exit() {
+  echo "$1" >&2
+  pm2 logs "$PM2_APP" --lines 100 --nostream || true
+  exit 1
+}
+
+wait_for_url() {
+  local name="$1"
+  local url="$2"
+  local max_attempts="${3:-30}"
+
+  echo "Waiting for $name..."
+  for attempt in $(seq 1 "$max_attempts"); do
+    if curl -fsS "$url" >/dev/null 2>&1; then
+      echo "$name is ready."
+      return 0
+    fi
+
+    if [[ "$attempt" == "$max_attempts" ]]; then
+      return 1
+    fi
+
+    sleep 2
+  done
+}
+
 cd "$APP_DIR"
 
 echo "Fetching latest code..."
@@ -77,6 +103,11 @@ DB_USER="$(node -e "const c=require('./ecosystem.config.js').apps[0].env; consol
 DB_PASSWORD="$(node -e "const c=require('./ecosystem.config.js').apps[0].env; console.log(c.DB_PASSWORD || '')")"
 DB_NAME="$(node -e "const c=require('./ecosystem.config.js').apps[0].env; console.log(c.DB_DATABASE || c.DB_NAME || 'postgres')")"
 
+echo "Stopping app..."
+if pm2 describe "$PM2_APP" >/dev/null; then
+  pm2 delete "$PM2_APP"
+fi
+
 if [[ "$RESET_SPEAKING_CLUBS_DB" == "1" ]]; then
   echo "Dropping speaking_clubs schema..."
   PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -c "DROP SCHEMA IF EXISTS speaking_clubs CASCADE;"
@@ -88,33 +119,23 @@ if [[ "$RESET_REMINDER_DB" == "1" ]]; then
 fi
 
 echo "Restarting app..."
-if pm2 describe "$PM2_APP" >/dev/null; then
-  pm2 delete "$PM2_APP"
-fi
 pm2 start ecosystem.config.js
 pm2 save
 
-echo "Waiting for app..."
-for attempt in {1..30}; do
-  if curl -fsS "http://127.0.0.1:3000/" >/dev/null; then
-    break
-  fi
-  if [[ "$attempt" == "30" ]]; then
-    echo "App did not start on 127.0.0.1:3000" >&2
-    pm2 logs "$PM2_APP" --lines 80 --nostream || true
-    exit 1
-  fi
-  sleep 2
-done
+wait_for_url "local app" "http://127.0.0.1:3000/reminder/telegram/status" 45 \
+  || show_logs_and_exit "App did not start on 127.0.0.1:3000"
+
+wait_for_url "public API" "$BASE_URL/reminder/telegram/status" 30 \
+  || show_logs_and_exit "Public API is not ready at $BASE_URL"
 
 echo "Refreshing Telegram webhooks..."
 curl -fsS -X POST "$BASE_URL/reminder/telegram/webhook/setup" \
   -H 'Content-Type: application/json' \
-  -d "{\"baseUrl\":\"$BASE_URL\"}" >/dev/null || true
+  -d "{\"baseUrl\":\"$BASE_URL\"}" >/dev/null
 
 curl -fsS -X POST "$BASE_URL/speaking-clubs/telegram/webhook/setup" \
   -H 'Content-Type: application/json' \
-  -d "{\"baseUrl\":\"$BASE_URL\"}" >/dev/null || true
+  -d "{\"baseUrl\":\"$BASE_URL\"}" >/dev/null
 
 echo "Checking statuses..."
 curl -fsS "$BASE_URL/reminder/telegram/status"
