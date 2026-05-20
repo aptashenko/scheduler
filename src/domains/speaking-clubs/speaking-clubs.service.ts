@@ -44,6 +44,14 @@ export class SpeakingClubsService {
     private readonly zoomService: SpeakingClubZoomService,
   ) {}
 
+  async registerTelegramStudent(profile: {
+    telegramId: string;
+    firstName?: string | null;
+    username?: string | null;
+  }) {
+    return this.usersService.upsertTelegramUser(profile);
+  }
+
   async createTeacherProfile(dto: CreateTeacherProfileDto) {
     this.assertText(dto.telegramUserId, 'telegramUserId');
     this.assertText(dto.displayName, 'displayName');

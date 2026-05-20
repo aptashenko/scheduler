@@ -205,6 +205,13 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
     });
 
     bot.start(async (ctx) => {
+      if (ctx.from) {
+        await this.speakingClubsService.registerTelegramStudent({
+          telegramId: String(ctx.from.id),
+          firstName: ctx.from.first_name ?? null,
+          username: ctx.from.username ?? null,
+        });
+      }
       await this.showStudentMenu(ctx);
     });
     bot.command('student', async (ctx) => this.showStudentMenu(ctx));
