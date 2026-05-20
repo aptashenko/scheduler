@@ -16,12 +16,18 @@ import {
   getDefaultTimeZone,
 } from '../parser/strict-reminder-parser.service';
 import { ReminderStatus } from '../reminders/entities/reminder.entity';
+import type { Users } from '../reminders/entities/users.entity';
 import { RemindersService } from '../reminders/reminders.service';
 import { UsersService } from '../reminders/users.service';
 
 type MemoirBotMode = 'polling' | 'webhook';
+type ReminderChatContext = Context & {
+  chat: { id: number };
+  from: { id: number };
+};
 type ReminderWizardState =
   | { step: 'awaiting_text' }
+  | { step: 'awaiting_group_member_username' }
   | { step: 'awaiting_datetime'; text: string }
   | {
       step: 'awaiting_remind_before';
@@ -38,17 +44,27 @@ type ReminderWizardState =
       step: 'awaiting_recipients';
       parsed: ReminderParseResult;
       remindBeforeMinutes: number;
+      selectedRecipientIds: string[];
       text: string;
     };
 
+const BACK_LABEL = '🔙 Back';
 const CREATE_EVENT_LABEL = '📝 Create new';
 const TIME_ZONE_LABEL = '🌍 Select timezone';
 const CHANGE_TIME_ZONE_LABEL = 'Change';
 const VIEW_EVENTS_LABEL = '📅 Show all';
+const MY_GROUP_LABEL = '👥 My group';
+const ADD_GROUP_MEMBER_LABEL = 'Add user';
 const NEXT_LABEL = 'Only me';
-const timeZones = ['Europe/Paris', 'Europe/Kyiv', 'Europe/Warsaw', 'Europe/London', 'America/New_York']
+const RECIPIENTS_DONE_LABEL = 'Done';
+const timeZones = [
+  'Europe/Paris',
+  'Europe/Kyiv',
+  'Europe/Warsaw',
+  'Europe/London',
+  'America/New_York',
+];
 const REMIND_BEFORE_OPTIONS = [5, 10, 15, 30, 60];
-
 
 @Injectable()
 export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
@@ -167,6 +183,8 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       await this.usersService.create({
         telegramId: String(ctx.from.id),
         telegramName: ctx.from.username ? `@${ctx.from.username}` : null,
+        firstName: ctx.from.first_name ?? null,
+        lastName: ctx.from.last_name ?? null,
       });
       await this.showMainMenu(ctx);
     });
@@ -176,22 +194,20 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
     });
 
     bot.hears(TIME_ZONE_LABEL, async (ctx) => {
-      await this.selectTimeZone(ctx)
+      await this.selectTimeZone(ctx);
     });
 
     bot.hears(CHANGE_TIME_ZONE_LABEL, async (ctx) => {
-      await this.selectTimeZone(ctx)
+      await this.selectTimeZone(ctx);
     });
 
     bot.hears(timeZones, async (ctx) => {
       await this.usersService.updateTimezone(
-          String(ctx.from.id),
-          ctx.message.text,
+        String(ctx.from.id),
+        ctx.message.text,
       );
 
-      await ctx.reply(
-          `✅ Timezone saved: ${ctx.message.text}`,
-      );
+      await ctx.reply(`✅ Timezone saved: ${ctx.message.text}`);
 
       await this.showMainMenu(ctx);
     });
@@ -210,6 +226,18 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
 
     bot.hears([VIEW_EVENTS_LABEL], async (ctx) => {
       await this.replyReminderDateButtons(ctx);
+    });
+
+    bot.hears(MY_GROUP_LABEL, async (ctx) => {
+      await this.replyGroupMembers(ctx);
+    });
+
+    bot.hears(BACK_LABEL, async (ctx) => {
+      await this.showMainMenu(ctx);
+    });
+
+    bot.hears(ADD_GROUP_MEMBER_LABEL, async (ctx) => {
+      await this.startAddGroupMember(ctx);
     });
 
     bot.on('callback_query', async (ctx) => {
@@ -244,6 +272,18 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       }
       if (query.data?.startsWith('remind_before:')) {
         await this.handleRemindBefore(ctx, query.data, query.message.chat.id);
+        return;
+      }
+      if (query.data?.startsWith('recipient_toggle:')) {
+        await this.handleRecipientToggle(
+          ctx,
+          query.data,
+          query.message.chat.id,
+        );
+        return;
+      }
+      if (query.data === 'recipients_done') {
+        await this.handleRecipientSelectionDone(ctx, query.message.chat.id);
         return;
       }
 
@@ -302,9 +342,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
         await this.createReminderFromNaturalText(ctx, transcript, calendar);
       } catch (error) {
         this.logger.error('Failed to create reminder from voice', error);
-        await ctx.reply(
-          'Voice massage is failed. Try again',
-        );
+        await ctx.reply('Voice massage is failed. Try again');
       }
     });
 
@@ -315,6 +353,10 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
 
       if (state?.step === 'awaiting_text') {
         await this.createReminderFromNaturalText(ctx, text, calendar);
+        return;
+      }
+      if (state?.step === 'awaiting_group_member_username') {
+        await this.addGroupMember(ctx, text);
         return;
       }
       if (state?.step === 'awaiting_datetime') {
@@ -348,17 +390,19 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       timeZoneButton.push(CHANGE_TIME_ZONE_LABEL);
     }
 
-    await ctx.reply('Main menu',
-        Markup.keyboard([
-          [CREATE_EVENT_LABEL, VIEW_EVENTS_LABEL],
-          timeZoneButton,
-        ]).resize()
+    await ctx.reply(
+      'Main menu',
+      Markup.keyboard([
+        [CREATE_EVENT_LABEL, VIEW_EVENTS_LABEL],
+        [MY_GROUP_LABEL],
+        timeZoneButton,
+      ]).resize(),
     );
   }
 
   private async selectTimeZone(ctx: Context) {
-
-    await ctx.reply('Select timezone',
+    await ctx.reply(
+      'Select timezone',
       Markup.keyboard(timeZones.map((key) => [key])).resize(),
     );
   }
@@ -394,8 +438,8 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
         text: input,
       });
       await ctx.reply(
-          'I could not recognize the date. Please select the date and time manually.',
-          );
+        'I could not recognize the date. Please select the date and time manually.',
+      );
       calendar.startNavCalendar(ctx.message);
       return;
     }
@@ -410,8 +454,8 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
         text: parsed.text || input,
       });
       await ctx.reply(
-          'I could not recognize the date. Please select the date and time manually.',
-          );
+        'I could not recognize the date. Please select the date and time manually.',
+      );
       calendar.startNavCalendar(ctx.message);
       return;
     }
@@ -452,8 +496,8 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
     }
 
     await ctx.reply(
-        'Choose a date for which to show reminders.',
-        Markup.inlineKeyboard(
+      'Choose a date for which to show reminders.',
+      Markup.inlineKeyboard(
         dates.map((date) => [
           Markup.button.callback(
             this.formatDateOnly(date.date, timeZone),
@@ -514,16 +558,17 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       await ctx.reply(await this.formatReminderCard(reminder, timeZone), {
         parse_mode: 'HTML',
         ...Markup.inlineKeyboard([
-          Markup.button.callback(
-            '🗑️ Delete',
-            `delete_reminder:${reminder.id}`,
-          ),
+          Markup.button.callback('🗑️ Delete', `delete_reminder:${reminder.id}`),
         ]),
       });
     }
   }
 
   private async addUsers(ctx: Context) {
+    const members = ctx.from
+      ? await this.usersService.findGroupMembers(String(ctx.from.id))
+      : [];
+
     await ctx.reply(
       [
         'Share reminder',
@@ -533,6 +578,136 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       ].join('\n'),
       Markup.keyboard([[NEXT_LABEL]]).resize(),
     );
+
+    if (members.length === 0) {
+      return;
+    }
+
+    await ctx.reply(
+      'Or select users from your group.',
+      this.buildRecipientSelectionKeyboard(members, []),
+    );
+  }
+
+  private async replyGroupMembers(ctx: Context) {
+    if (!ctx.from) {
+      return;
+    }
+
+    const members = await this.usersService.findGroupMembers(
+      String(ctx.from.id),
+    );
+    const message =
+      members.length === 0
+        ? ['My group', '', 'No users added yet.'].join('\n')
+        : [
+            'My group',
+            '',
+            ...members.map((member) => this.formatGroupMember(member)),
+          ].join('\n');
+
+    await ctx.reply(
+      message,
+      Markup.keyboard([
+        [ADD_GROUP_MEMBER_LABEL, MY_GROUP_LABEL],
+        [BACK_LABEL],
+      ]).resize(),
+    );
+  }
+
+  private async startAddGroupMember(ctx: Context) {
+    if (!ctx.from || !ctx.chat) {
+      return;
+    }
+
+    this.setWizardState(ctx.from.id, ctx.chat.id, {
+      step: 'awaiting_group_member_username',
+    });
+    await ctx.reply('Enter Telegram username. Example: @aptashenko');
+  }
+
+  private async addGroupMember(ctx: ReminderChatContext, input: string) {
+    try {
+      await this.usersService.addGroupMember(String(ctx.from.id), input);
+      this.clearWizardState(ctx.from.id, ctx.chat.id);
+      await ctx.reply('User added.');
+      await this.replyGroupMembers(ctx);
+    } catch (error) {
+      await ctx.reply('User was not found in the database.');
+    }
+  }
+
+  private async handleRecipientToggle(
+    ctx: Context,
+    callbackData: string,
+    chatId: number,
+  ) {
+    if (!ctx.from) {
+      return;
+    }
+
+    const state = this.getWizardState(ctx.from.id, chatId);
+    if (state?.step !== 'awaiting_recipients') {
+      await ctx.answerCbQuery('Reminder not found');
+      return;
+    }
+
+    const memberTelegramId = callbackData.replace('recipient_toggle:', '');
+    const selectedRecipientIds = state.selectedRecipientIds.includes(
+      memberTelegramId,
+    )
+      ? state.selectedRecipientIds.filter((id) => id !== memberTelegramId)
+      : [...state.selectedRecipientIds, memberTelegramId];
+
+    this.setWizardState(ctx.from.id, chatId, {
+      ...state,
+      selectedRecipientIds,
+    });
+
+    const members = await this.usersService.findGroupMembers(
+      String(ctx.from.id),
+    );
+    await ctx.answerCbQuery();
+
+    if ('editMessageReplyMarkup' in ctx) {
+      await ctx.editMessageReplyMarkup(
+        this.buildRecipientSelectionKeyboard(members, selectedRecipientIds)
+          .reply_markup,
+      );
+    }
+  }
+
+  private async handleRecipientSelectionDone(ctx: Context, chatId: number) {
+    if (!ctx.from || !ctx.chat) {
+      return;
+    }
+
+    const state = this.getWizardState(ctx.from.id, chatId);
+    if (state?.step !== 'awaiting_recipients') {
+      await ctx.answerCbQuery('Reminder not found');
+      return;
+    }
+
+    await ctx.answerCbQuery();
+    await this.createReminderForRecipientIds(ctx as ReminderChatContext, [
+      String(chatId),
+      ...state.selectedRecipientIds,
+    ]);
+  }
+
+  private buildRecipientSelectionKeyboard(
+    members: Users[],
+    selectedRecipientIds: string[],
+  ) {
+    return Markup.inlineKeyboard([
+      ...members.map((member) => [
+        Markup.button.callback(
+          `${selectedRecipientIds.includes(member.telegramId) ? '✅' : '☐'} ${this.formatGroupMember(member)}`,
+          `recipient_toggle:${member.telegramId}`,
+        ),
+      ]),
+      [Markup.button.callback(RECIPIENTS_DONE_LABEL, 'recipients_done')],
+    ]);
   }
 
   private async replyRemindBeforeOptions(ctx: Context) {
@@ -626,6 +801,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
     this.setWizardState(ctx.from.id, chatId, {
       parsed: state.parsed,
       remindBeforeMinutes: state.remindBeforeMinutes,
+      selectedRecipientIds: [],
       step: 'awaiting_recipients',
       text: state.text,
     });
@@ -635,10 +811,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async createReminderWithRecipients(
-    ctx: Context & {
-      chat: { id: number };
-      from: { id: number };
-    },
+    ctx: ReminderChatContext,
     input: string,
   ) {
     const state = this.getWizardState(ctx.from.id, ctx.chat.id);
@@ -649,18 +822,32 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
     const recipients = await this.resolveRecipientChatIds(
       input,
       String(ctx.chat.id),
+      state.selectedRecipientIds,
     );
     if (!recipients.ok) {
       await ctx.reply(
-          `User ${recipients.missingUsername} has not registered yet`
+        `User ${recipients.missingUsername} has not registered yet`,
       );
+      return;
+    }
+
+    await this.createReminderForRecipientIds(ctx, recipients.telegramChatIds);
+  }
+
+  private async createReminderForRecipientIds(
+    ctx: ReminderChatContext,
+    telegramChatIds: string[],
+  ) {
+    const state = this.getWizardState(ctx.from.id, ctx.chat.id);
+    if (state?.step !== 'awaiting_recipients' || !state.parsed.remindAt) {
+      await ctx.reply('Reminder not found');
       return;
     }
 
     try {
       const reminder = await this.remindersService.create({
         userId: String(ctx.from.id),
-        telegramChatIds: recipients.telegramChatIds,
+        telegramChatIds,
         text: state.parsed.text,
         remindAt: state.parsed.remindAt,
         eventAt: state.parsed.remindAt,
@@ -668,13 +855,15 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       });
       await this.notifyAddedRecipients(
         reminder,
-        recipients.telegramChatIds,
+        telegramChatIds,
         String(ctx.chat.id),
       );
 
       this.clearWizardState(ctx.from.id, ctx.chat.id);
 
-      const timezone = await this.usersService.getTimeZone(String(ctx.from!.id));
+      const timezone = await this.usersService.getTimeZone(
+        String(ctx.from!.id),
+      );
       let timeZoneButton = [TIME_ZONE_LABEL];
       if (timezone) {
         timeZoneButton[0] = `Timezone: ${timezone}`;
@@ -682,8 +871,12 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       }
 
       await ctx.reply(
-          'Reminder created!',
-          Markup.keyboard([[CREATE_EVENT_LABEL, VIEW_EVENTS_LABEL], timeZoneButton]).resize(),
+        'Reminder created!',
+        Markup.keyboard([
+          [CREATE_EVENT_LABEL, VIEW_EVENTS_LABEL],
+          [MY_GROUP_LABEL],
+          timeZoneButton,
+        ]).resize(),
       );
     } catch (error) {
       this.logger.error('Failed to create reminder with recipients', error);
@@ -691,9 +884,21 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async resolveRecipientChatIds(input: string, currentChatId: string) {
+  private async resolveRecipientChatIds(
+    input: string,
+    currentChatId: string,
+    selectedRecipientIds: string[] = [],
+  ) {
     const recipientNames = this.parseRecipientNames(input);
-    if (recipientNames.length === 0 || input.trim() === NEXT_LABEL) {
+    if (input.trim() === NEXT_LABEL) {
+      return {
+        ok: true as const,
+        telegramChatIds: Array.from(
+          new Set([currentChatId, ...selectedRecipientIds].filter(Boolean)),
+        ),
+      };
+    }
+    if (recipientNames.length === 0 && selectedRecipientIds.length === 0) {
       return {
         ok: true as const,
         telegramChatIds: [currentChatId],
@@ -716,7 +921,11 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
     return {
       ok: true as const,
       telegramChatIds: Array.from(
-        new Set([currentChatId, ...recipientIds].filter(Boolean)),
+        new Set(
+          [currentChatId, ...selectedRecipientIds, ...recipientIds].filter(
+            Boolean,
+          ),
+        ),
       ),
     };
   }
@@ -777,10 +986,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       {
         parse_mode: 'HTML',
         ...Markup.inlineKeyboard([
-          Markup.button.callback(
-            '🗑️ Delete',
-            `delete_reminder:${reminder.id}`,
-          ),
+          Markup.button.callback('🗑️ Delete', `delete_reminder:${reminder.id}`),
         ]),
       },
     );
@@ -956,7 +1162,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
         : `${reminder.remindBeforeMinutes} min`,
       '',
       `👥 <b>Participants</b>`,
-      formattedUsers
+      formattedUsers,
     ];
     return message.join('\n');
   }
@@ -1017,6 +1223,16 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       }
     }
     return users;
+  }
+
+  private formatGroupMember(user: {
+    firstName: string | null;
+    lastName: string | null;
+    telegramId: string;
+    telegramName: string | null;
+  }) {
+    const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ');
+    return `${fullName || user.telegramId} / ${user.telegramName ?? user.telegramId}`;
   }
 
   private async getChatTimeZone(telegramChatId: string) {

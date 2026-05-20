@@ -14,6 +14,7 @@ const migrationOrder = [
   'add-zoom-registrants-to-bookings.sql',
   'add-speaking-club-session-reminders.sql',
   'add-reminder-before-notifications.sql',
+  'add-reminder-user-group-members.sql',
 ];
 
 loadEnv(envPath);

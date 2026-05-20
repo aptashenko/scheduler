@@ -5,6 +5,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { initDatabase } from './database/config';
 import { ReminderDomainModule } from './domains/reminder/reminder-domain.module';
+import { SkyupAgentAssistantDomainModule } from './domains/skyup-agent-assistant/skyup-agent-assistant-domain.module';
 import { SpeakingClubsDomainModule } from './domains/speaking-clubs/speaking-clubs-domain.module';
 
 @Module({
@@ -12,8 +13,13 @@ import { SpeakingClubsDomainModule } from './domains/speaking-clubs/speaking-clu
     initDatabase(),
     ScheduleModule.forRoot(),
     ReminderDomainModule,
+    SkyupAgentAssistantDomainModule,
     SpeakingClubsDomainModule,
     RouterModule.register([
+      {
+        path: 'skyup-agent-assistant',
+        module: SkyupAgentAssistantDomainModule,
+      },
       {
         path: 'reminder',
         module: ReminderDomainModule,
