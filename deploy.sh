@@ -128,6 +128,9 @@ wait_for_url "local app" "http://127.0.0.1:3000/reminder/telegram/status" 45 \
 wait_for_url "public API" "$BASE_URL/reminder/telegram/status" 30 \
   || show_logs_and_exit "Public API is not ready at $BASE_URL"
 
+wait_for_url "SkyUp agent assistant" "$BASE_URL/skyup-agent-assistant/telegram/status" 30 \
+  || show_logs_and_exit "SkyUp agent assistant is not ready at $BASE_URL"
+
 echo "Refreshing Telegram webhooks..."
 curl -fsS -X POST "$BASE_URL/reminder/telegram/webhook/setup" \
   -H 'Content-Type: application/json' \
@@ -137,10 +140,16 @@ curl -fsS -X POST "$BASE_URL/speaking-clubs/telegram/webhook/setup" \
   -H 'Content-Type: application/json' \
   -d "{\"baseUrl\":\"$BASE_URL\"}" >/dev/null
 
+curl -fsS -X POST "$BASE_URL/skyup-agent-assistant/telegram/webhook/setup" \
+  -H 'Content-Type: application/json' \
+  -d "{\"baseUrl\":\"$BASE_URL\"}" >/dev/null
+
 echo "Checking statuses..."
 curl -fsS "$BASE_URL/reminder/telegram/status"
 echo
 curl -fsS "$BASE_URL/speaking-clubs/telegram/status"
+echo
+curl -fsS "$BASE_URL/skyup-agent-assistant/telegram/status"
 echo
 
 pm2 status "$PM2_APP"
