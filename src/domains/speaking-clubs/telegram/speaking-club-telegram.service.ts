@@ -521,25 +521,28 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
       String(ctx.from.id),
     );
     for (const club of clubs) {
-      if (!club.upcomingSessions.length) {
+      const session = club.upcomingSessions[0];
+      const bookedCount = session?.bookings?.length ?? 0;
+      const price = club.isFree ? 'Free' : `${club.price} ${club.currency}`;
+      const lines = [
+        `📘 ${club.title}`,
+        `🌐 ${club.targetLanguage} · ${club.levels.join(', ')}`,
+        `🗣 Support: ${club.supportLanguages.join(', ')}`,
+        session ? `📅 ${this.formatDate(session.startAt, timezone)}` : null,
+        `⏱ ${club.durationMinutes} min · ${price}`,
+        session ? `👥 Seats: ${bookedCount}/${club.capacity}` : null,
+        club.description?.trim() ? `📝 ${club.description.trim()}` : null,
+      ]
+        .filter((line) => line !== null)
+        .join('\n');
+
+      if (!session) {
+        await ctx.reply(lines);
         continue;
       }
 
-      const session = club.upcomingSessions[0];
-      const bookedCount = session.bookings?.length ?? 0;
-      const price = club.isFree ? 'Free' : `${club.price} ${club.currency}`;
       await ctx.reply(
-        [
-          `📘 ${club.title}`,
-          `🌐 ${club.targetLanguage} · ${club.levels.join(', ')}`,
-          `🗣 Support: ${club.supportLanguages.join(', ')}`,
-          `📅 ${this.formatDate(session.startAt, timezone)}`,
-          `⏱ ${club.durationMinutes} min · ${price}`,
-          `👥 Seats: ${bookedCount}/${club.capacity}`,
-          club.description?.trim() ? `📝 ${club.description.trim()}` : null,
-        ]
-          .filter((line) => line !== null)
-          .join('\n'),
+        lines,
         Markup.inlineKeyboard([
           Markup.button.callback(
             'Book session',
