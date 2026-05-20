@@ -4,5 +4,5 @@ export class CreateStudentProfileDto {
   telegramUserId: string;
   nativeLanguage?: SpeakingClubLanguage | null;
   learningLanguages?: SpeakingClubLanguage[];
-  timezone: string;
+  timezone?: string;
 }

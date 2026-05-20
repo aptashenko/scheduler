@@ -5,6 +5,7 @@ import {
 
 export class SearchSpeakingClubsDto {
   targetLanguage: SpeakingClubLanguage;
-  supportLanguage: SpeakingClubLanguage;
+  supportLanguage?: SpeakingClubLanguage;
+  supportLanguages?: SpeakingClubLanguage[];
   level: SpeakingClubLevel;
 }

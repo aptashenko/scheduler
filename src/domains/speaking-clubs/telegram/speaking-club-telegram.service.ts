@@ -10,6 +10,7 @@ import { SearchSpeakingClubsDto } from '../dto/search-speaking-clubs.dto';
 import {
   SpeakingClubLanguage,
   SpeakingClubLevel,
+  SessionBookingStatus,
 } from '../entities/speaking-club.enums';
 import { SpeakingClubAnalyticsService } from '../speaking-club-analytics.service';
 import { SpeakingClubBookingsService } from '../speaking-club-bookings.service';
@@ -19,7 +20,6 @@ type SpeakingClubBotMode = 'polling' | 'webhook';
 type StudentSearchState = Partial<SearchSpeakingClubsDto>;
 type TeacherDraftStep =
   | 'displayName'
-  | 'timezone'
   | 'title'
   | 'description'
   | 'targetLanguage'
@@ -29,8 +29,7 @@ type TeacherDraftStep =
   | 'capacity'
   | 'price'
   | 'currency'
-  | 'sessionStartAt'
-  | 'sessionTimezone';
+  | 'sessionStartAt';
 type TeacherDraft = {
   step: TeacherDraftStep;
   teacherId?: number;
@@ -49,7 +48,6 @@ type TeacherDraft = {
     currency?: string;
     isFree?: boolean;
     sessionStartAt?: string;
-    sessionTimezone?: string;
   };
 };
 
@@ -179,6 +177,15 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
     return url;
   }
 
+  async sendMessage(telegramUserId: string, text: string) {
+    if (!this.bot) {
+      this.logger.warn('Speaking clubs bot is not initialized. Message skipped.');
+      return;
+    }
+
+    await this.bot.telegram.sendMessage(telegramUserId, text);
+  }
+
   private registerHandlers(bot: Telegraf) {
     const calendar = new Calendar(bot, {
       bot_api: 'telegraf',
@@ -228,7 +235,11 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
     });
     bot.action(/^sc_select_support_language:(.+)$/, async (ctx) => {
       await ctx.answerCbQuery();
-      await this.selectSupportLanguage(ctx, ctx.match[1] as SpeakingClubLanguage);
+      await this.toggleSupportLanguage(ctx, ctx.match[1] as SpeakingClubLanguage);
+    });
+    bot.action('sc_support_languages_done', async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.finishSupportLanguages(ctx);
     });
     bot.action(/^sc_teacher_toggle_support_language:(.+)$/, async (ctx) => {
       await ctx.answerCbQuery();
@@ -253,9 +264,9 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
       await ctx.answerCbQuery();
       await this.selectTeacherCurrency(ctx, ctx.match[1], calendar);
     });
-    bot.action(/^sc_teacher_session_timezone:(.+)$/, async (ctx) => {
+    bot.action(/^sc_set_timezone:(.+)$/, async (ctx) => {
       await ctx.answerCbQuery();
-      await this.selectTeacherSessionTimezone(ctx, ctx.match[1]);
+      await this.setUserTimezone(ctx, ctx.match[1]);
     });
     bot.action(/^sc_select_level:(.+)$/, async (ctx) => {
       await ctx.answerCbQuery();
@@ -291,6 +302,18 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
       await ctx.answerCbQuery();
       await this.showTeacherClubCard(ctx, Number(ctx.match[1]));
     });
+    bot.action(/^sc_teacher_add_session:(\d+)$/, async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.startCreateSessionForClub(ctx, Number(ctx.match[1]), calendar);
+    });
+    bot.action(/^sc_teacher_club_sessions:(\d+)$/, async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.showTeacherClubSessions(ctx, Number(ctx.match[1]));
+    });
+    bot.action(/^sc_teacher_session:(\d+)$/, async (ctx) => {
+      await ctx.answerCbQuery();
+      await this.showTeacherSessionCard(ctx, Number(ctx.match[1]));
+    });
     bot.action('sc_create_club', async (ctx) => {
       await ctx.answerCbQuery();
       await this.startCreateClub(ctx);
@@ -306,10 +329,10 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
       ctx.reply('Payments are shown on each paid booking.'),
     );
     bot.hears(STUDENT_FAVORITES, async (ctx) =>
-      ctx.reply('Favorite clubs are not part of the MVP yet.'),
+      ctx.reply('Will be available soon'),
     );
     bot.hears(STUDENT_SETTINGS, async (ctx) =>
-      ctx.reply('Timezone is taken from your profile or session timezone.'),
+      this.replyUserTimezones(ctx),
     );
 
     bot.hears(TEACHER_MY_CLUBS, async (ctx) => this.showTeacherClubs(ctx));
@@ -324,7 +347,7 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
       ctx.reply('Payout setup is not connected yet.'),
     );
     bot.hears(TEACHER_SETTINGS, async (ctx) =>
-      ctx.reply('Teacher timezone is saved in the teacher profile.'),
+      this.replyUserTimezones(ctx),
     );
 
     bot.on('callback_query', async (ctx) => {
@@ -358,8 +381,7 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
       'Speaking clubs',
       Markup.keyboard([
         [STUDENT_FIND_CLUB, STUDENT_MY_SESSIONS],
-        [STUDENT_PAYMENTS, STUDENT_FAVORITES],
-        [STUDENT_SETTINGS],
+        [STUDENT_FAVORITES, STUDENT_SETTINGS],
       ]).resize(),
     );
   }
@@ -369,8 +391,7 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
       'Teacher menu',
       Markup.keyboard([
         [TEACHER_MY_CLUBS, TEACHER_CREATE_CLUB],
-        [TEACHER_STUDENTS, TEACHER_ANALYTICS],
-        [TEACHER_PAYOUTS, TEACHER_SETTINGS],
+        [TEACHER_ANALYTICS, TEACHER_SETTINGS],
       ]).resize(),
     );
   }
@@ -394,28 +415,60 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
   }
 
   private async selectTargetLanguage(ctx, language: SpeakingClubLanguage) {
-    this.studentSearch.set(this.searchKey(ctx), { targetLanguage: language });
+    this.studentSearch.set(this.searchKey(ctx), {
+      targetLanguage: language,
+      supportLanguages: [],
+    });
+    await this.replyStudentSupportLanguages(ctx);
+  }
+
+  private async replyStudentSupportLanguages(ctx) {
+    const state = this.studentSearch.get(this.searchKey(ctx)) ?? {};
+    const selected = state.supportLanguages ?? [];
     await ctx.reply(
-      'Choose support language',
+      'Choose support languages',
       Markup.inlineKeyboard([
-        this.languageButtons('sc_select_support_language', [
-          SpeakingClubLanguage.UA,
-          SpeakingClubLanguage.RU,
-          SpeakingClubLanguage.EN,
-        ]),
-        this.languageButtons('sc_select_support_language', [
-          SpeakingClubLanguage.FR,
-        ]),
+        SUPPORT_LANGUAGE_OPTIONS.slice(0, 3).map((language) =>
+          Markup.button.callback(
+            `${selected.includes(language) ? '✓ ' : ''}${LANGUAGE_FLAGS[language]} ${language}`,
+            `sc_select_support_language:${language}`,
+          ),
+        ),
+        SUPPORT_LANGUAGE_OPTIONS.slice(3).map((language) =>
+          Markup.button.callback(
+            `${selected.includes(language) ? '✓ ' : ''}${LANGUAGE_FLAGS[language]} ${language}`,
+            `sc_select_support_language:${language}`,
+          ),
+        ),
+        [Markup.button.callback('Done', 'sc_support_languages_done')],
       ]),
     );
   }
 
-  private async selectSupportLanguage(ctx, language: SpeakingClubLanguage) {
+  private async toggleSupportLanguage(ctx, language: SpeakingClubLanguage) {
+    if (!SUPPORT_LANGUAGE_OPTIONS.includes(language)) {
+      return;
+    }
+
     const state = this.studentSearch.get(this.searchKey(ctx)) ?? {};
+    const selected = state.supportLanguages ?? [];
     this.studentSearch.set(this.searchKey(ctx), {
       ...state,
-      supportLanguage: language,
+      supportLanguages: selected.includes(language)
+        ? selected.filter((item) => item !== language)
+        : [...selected, language],
     });
+    await this.replyStudentSupportLanguages(ctx);
+  }
+
+  private async finishSupportLanguages(ctx) {
+    const state = this.studentSearch.get(this.searchKey(ctx)) ?? {};
+    if (!state.supportLanguages?.length) {
+      await ctx.reply('Choose at least one support language.');
+      await this.replyStudentSupportLanguages(ctx);
+      return;
+    }
+
     await ctx.reply(
       'Choose level',
       Markup.inlineKeyboard([
@@ -440,7 +493,11 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
 
   private async showClubs(ctx) {
     const state = this.studentSearch.get(this.searchKey(ctx));
-    if (!state?.targetLanguage || !state.supportLanguage || !state.level) {
+    if (
+      !state?.targetLanguage ||
+      !state.supportLanguages?.length ||
+      !state.level
+    ) {
       await this.startFindClub(ctx);
       return;
     }
@@ -453,19 +510,29 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
       return;
     }
 
+    const timezone = await this.speakingClubsService.getUserTimezone(
+      String(ctx.from.id),
+    );
     for (const club of clubs) {
       if (!club.upcomingSessions.length) {
         continue;
       }
 
       const session = club.upcomingSessions[0];
+      const bookedCount = session.bookings?.length ?? 0;
+      const price = club.isFree ? 'Free' : `${club.price} ${club.currency}`;
       await ctx.reply(
         [
-          club.title,
-          `${club.targetLanguage} ${club.levels.join(', ')}`,
-          club.isFree ? 'Free' : `${club.price} ${club.currency}`,
-          this.formatDate(session.startAt, session.timezone),
-        ].join('\n'),
+          `📘 ${club.title}`,
+          `🌐 ${club.targetLanguage} · ${club.levels.join(', ')}`,
+          `🗣 Support: ${club.supportLanguages.join(', ')}`,
+          `📅 ${this.formatDate(session.startAt, timezone)}`,
+          `⏱ ${club.durationMinutes} min · ${price}`,
+          `👥 Seats: ${bookedCount}/${club.capacity}`,
+          club.description?.trim() ? `📝 ${club.description.trim()}` : null,
+        ]
+          .filter((line) => line !== null)
+          .join('\n'),
         Markup.inlineKeyboard([
           Markup.button.callback(
             'Book session',
@@ -510,17 +577,35 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
       return;
     }
 
-    await ctx.reply(
-      bookings
-        .map((booking) =>
-          [
-            booking.session.club.title,
-            this.formatDate(booking.session.startAt, booking.session.timezone),
-            booking.status,
-          ].join(' - '),
-        )
-        .join('\n'),
+    const timezone = await this.speakingClubsService.getUserTimezone(
+      String(ctx.from.id),
     );
+    for (const booking of bookings) {
+      const session = booking.session;
+      const club = session.club;
+      const price = club.isFree ? 'Free' : `${club.price} ${club.currency}`;
+      const lines = [
+        club.title,
+        `${club.targetLanguage} · ${club.levels.join(', ')}`,
+        this.formatDate(session.startAt, timezone),
+        `${club.durationMinutes} min · ${price}`,
+        `Booking: ${booking.status}`,
+        `Payment: ${booking.paymentStatus}`,
+      ];
+      const buttons =
+        booking.status === SessionBookingStatus.Confirmed
+          ? this.buildStudentSessionButtons(booking)
+          : [[Markup.button.callback('Pay', `sc_pay_booking:${booking.id}`)]];
+      if (
+        booking.status === SessionBookingStatus.Confirmed &&
+        booking.uniqueZoomUrl &&
+        !this.canUseTelegramUrlButton(booking.uniqueZoomUrl)
+      ) {
+        lines.push(`Link: ${booking.uniqueZoomUrl}`);
+      }
+
+      await this.replyWithOptionalKeyboard(ctx, lines.join('\n'), buttons);
+    }
   }
 
   private async showTeacherClubs(ctx) {
@@ -546,6 +631,9 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
   }
 
   private async showTeacherClubCard(ctx, clubId: number) {
+    const timezone = await this.speakingClubsService.getUserTimezone(
+      String(ctx.from.id),
+    );
     const { club, sessions } = await this.speakingClubsService.getTeacherClub(
       String(ctx.from.id),
       clubId,
@@ -570,13 +658,138 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
         nextSession
           ? [
               '📅 Next session',
-              this.formatDate(nextSession.startAt, nextSession.timezone),
+              this.formatDate(nextSession.startAt, timezone),
               `👥 Seats: ${confirmedCount}/${club.capacity} booked (${fillRate}%)`,
             ].join('\n')
           : '📅 No upcoming sessions',
       ]
         .filter((line) => line !== null)
         .join('\n'),
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback(
+            'View sessions',
+            `sc_teacher_club_sessions:${club.id}`,
+          ),
+        ],
+        [
+          Markup.button.callback(
+            'Add session',
+            `sc_teacher_add_session:${club.id}`,
+          ),
+        ],
+      ]),
+    );
+  }
+
+  private async startCreateSessionForClub(ctx, clubId: number, calendar: Calendar) {
+    const { club } = await this.speakingClubsService.getTeacherClub(
+      String(ctx.from.id),
+      clubId,
+    );
+    const timezone = await this.speakingClubsService.getUserTimezone(
+      String(ctx.from.id),
+      '',
+    );
+    if (!timezone) {
+      await ctx.reply('Set your timezone first.');
+      await this.replyUserTimezones(ctx);
+      return;
+    }
+
+    this.teacherDrafts.set(this.searchKey(ctx), {
+      step: 'sessionStartAt',
+      clubId: club.id,
+      data: {},
+    });
+    await ctx.reply(`Choose date and time for ${club.title}`);
+    calendar.startNavCalendar(ctx.callbackQuery?.message ?? ctx.message);
+  }
+
+  private async showTeacherClubSessions(ctx, clubId: number) {
+    const timezone = await this.speakingClubsService.getUserTimezone(
+      String(ctx.from.id),
+    );
+    const sessions = await this.speakingClubsService.listTeacherClubSessions(
+      String(ctx.from.id),
+      clubId,
+    );
+    if (!sessions.length) {
+      await ctx.reply('This club has no sessions yet.');
+      return;
+    }
+
+    await ctx.reply(
+      'Sessions',
+      Markup.inlineKeyboard(
+        sessions.map((session) => [
+          Markup.button.callback(
+            [
+              `#${session.id}`,
+              this.formatDate(session.startAt, timezone),
+              session.status,
+              `${session.bookings?.length ?? 0} bookings`,
+            ].join(' - '),
+            `sc_teacher_session:${session.id}`,
+          ),
+        ]),
+      ),
+    );
+  }
+
+  private async showTeacherSessionCard(ctx, sessionId: number) {
+    const timezone = await this.speakingClubsService.getUserTimezone(
+      String(ctx.from.id),
+    );
+    const session = await this.speakingClubsService.getTeacherClubSession(
+      String(ctx.from.id),
+      sessionId,
+    );
+    const bookings = session.bookings ?? [];
+    const bookedCount = bookings.length;
+    const capacity = session.club.capacity;
+    const fillRate = Math.round((bookedCount / capacity) * 100);
+    const students = bookings.length
+      ? bookings
+          .map((booking, index) =>
+            [
+              `${index + 1}. ${this.formatStudentLink(booking.student)}`,
+              `booking #${booking.id}`,
+              this.escapeHtml(booking.status),
+              this.escapeHtml(booking.paymentStatus),
+            ].join(' - '),
+          )
+          .join('\n')
+      : 'No bookings yet.';
+
+    await ctx.reply(
+      [
+        `Session #${session.id}`,
+        this.escapeHtml(session.club.title),
+        this.escapeHtml(this.formatDate(session.startAt, timezone)),
+        `Status: ${this.escapeHtml(session.status)}`,
+        `Seats: ${bookedCount}/${capacity} booked (${fillRate}%)`,
+        `Zoom meeting: ${this.escapeHtml(session.zoomMeetingId ?? 'not set')}`,
+        session.zoomJoinUrl
+          ? `Zoom link: ${this.escapeHtml(session.zoomJoinUrl)}`
+          : null,
+        '',
+        'Booked students',
+        students,
+      ]
+        .filter((line) => line !== null)
+        .join('\n'),
+      {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback(
+              'Back to sessions',
+              `sc_teacher_club_sessions:${session.club.id}`,
+            ),
+          ],
+        ]),
+      },
     );
   }
 
@@ -597,6 +810,45 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
     );
   }
 
+  private async replyUserTimezones(ctx) {
+    await ctx.reply(
+      'Choose timezone',
+      Markup.inlineKeyboard([
+        TIMEZONE_OPTIONS.slice(0, 2).map((timezone) =>
+          Markup.button.callback(timezone, `sc_set_timezone:${timezone}`),
+        ),
+        TIMEZONE_OPTIONS.slice(2, 4).map((timezone) =>
+          Markup.button.callback(timezone, `sc_set_timezone:${timezone}`),
+        ),
+        TIMEZONE_OPTIONS.slice(4).map((timezone) =>
+          Markup.button.callback(timezone, `sc_set_timezone:${timezone}`),
+        ),
+      ]),
+    );
+  }
+
+  private async setUserTimezone(ctx, timezone: string) {
+    if (!TIMEZONE_OPTIONS.includes(timezone)) {
+      return;
+    }
+
+    await this.speakingClubsService.setUserTimezone(String(ctx.from.id), timezone);
+    await ctx.reply(`Timezone saved: ${timezone}`);
+
+    const draft = this.teacherDrafts.get(this.searchKey(ctx));
+    if (draft?.step === 'displayName' && draft.data.displayName) {
+      const teacher = await this.speakingClubsService.createTeacherProfile({
+        telegramUserId: String(ctx.from.id),
+        displayName: draft.data.displayName,
+        timezone,
+        bio: null,
+      });
+      draft.teacherId = teacher.id;
+      draft.step = 'title';
+      await this.replyClubTitlePrompt(ctx);
+    }
+  }
+
   private async startCreateClub(ctx) {
     const teacher = await this.speakingClubsService.getTeacherByTelegramId(
       String(ctx.from.id),
@@ -610,12 +862,18 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
       return;
     }
 
+    if (!teacher.user?.timezone) {
+      await ctx.reply('Set your timezone first.');
+      await this.replyUserTimezones(ctx);
+      return;
+    }
+
     this.teacherDrafts.set(this.searchKey(ctx), {
       step: 'title',
       teacherId: teacher.id,
       data: {},
     });
-    await ctx.reply('Enter club title');
+    await this.replyClubTitlePrompt(ctx);
   }
 
   private async handleTeacherDraft(ctx) {
@@ -633,22 +891,24 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
 
     if (draft.step === 'displayName') {
       draft.data.displayName = text;
-      draft.step = 'timezone';
-      await ctx.reply('Enter teacher timezone, for example Europe/Paris');
-      return;
-    }
-
-    if (draft.step === 'timezone') {
+      const timezone = await this.speakingClubsService.getUserTimezone(
+        String(ctx.from.id),
+        '',
+      );
+      if (!timezone) {
+        await ctx.reply('Set your timezone first.');
+        await this.replyUserTimezones(ctx);
+        return;
+      }
       const teacher = await this.speakingClubsService.createTeacherProfile({
         telegramUserId: String(ctx.from.id),
         displayName: draft.data.displayName!,
-        timezone: text,
+        timezone,
         bio: null,
       });
       draft.teacherId = teacher.id;
-      draft.data.timezone = text;
       draft.step = 'title';
-      await ctx.reply('Enter club title');
+      await this.replyClubTitlePrompt(ctx);
       return;
     }
 
@@ -718,10 +978,10 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
       await ctx.reply('Choose the date and time in the calendar.');
       return;
     }
-    if (draft.step === 'sessionTimezone') {
-      await this.replyTeacherSessionTimezones(ctx);
-      return;
-    }
+  }
+
+  private async replyClubTitlePrompt(ctx) {
+    await ctx.reply('What should students see as the club name?');
   }
 
   private parseLanguage(value: string) {
@@ -946,66 +1206,35 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
       return;
     }
 
-    const startAt = this.calendarDateToIso(selectedDate);
+    const timezone = await this.speakingClubsService.getUserTimezone(
+      String(ctx.from.id),
+      '',
+    );
+    if (!timezone) {
+      await ctx.reply('Set your timezone first.');
+      await this.replyUserTimezones(ctx);
+      return;
+    }
+
+    const startAt = this.calendarDateToIso(selectedDate, timezone);
     if (!startAt) {
       await ctx.reply('Invalid selected date.');
       return;
     }
 
     draft.data.sessionStartAt = startAt;
-    draft.step = 'sessionTimezone';
-    await this.replyTeacherSessionTimezones(ctx);
-  }
-
-  private async replyTeacherSessionTimezones(ctx) {
-    await ctx.reply(
-      'Choose session timezone',
-      Markup.inlineKeyboard([
-        TIMEZONE_OPTIONS.slice(0, 2).map((timezone) =>
-          Markup.button.callback(
-            timezone,
-            `sc_teacher_session_timezone:${timezone}`,
-          ),
-        ),
-        TIMEZONE_OPTIONS.slice(2, 4).map((timezone) =>
-          Markup.button.callback(
-            timezone,
-            `sc_teacher_session_timezone:${timezone}`,
-          ),
-        ),
-        TIMEZONE_OPTIONS.slice(4).map((timezone) =>
-          Markup.button.callback(
-            timezone,
-            `sc_teacher_session_timezone:${timezone}`,
-          ),
-        ),
-      ]),
-    );
-  }
-
-  private async selectTeacherSessionTimezone(ctx, timezone: string) {
-    if (!TIMEZONE_OPTIONS.includes(timezone)) {
-      return;
-    }
-
-    const draft = this.teacherDrafts.get(this.searchKey(ctx));
-    if (!draft || draft.step !== 'sessionTimezone') {
-      return;
-    }
-
-    draft.data.sessionTimezone = timezone;
     const session = await this.speakingClubsService.createSession({
       clubId: draft.clubId!,
       startAt: draft.data.sessionStartAt!,
-      timezone: draft.data.sessionTimezone,
+      timezone,
     });
     this.teacherDrafts.delete(this.searchKey(ctx));
     await ctx.reply(
-      `Session created at ${this.formatDate(session.startAt, session.timezone)}`,
+      `Session created at ${this.formatDate(session.startAt, timezone)}`,
     );
   }
 
-  private calendarDateToIso(value: string) {
+  private calendarDateToIso(value: string, timeZone: string) {
     const match = value.match(
       /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})$/,
     );
@@ -1014,15 +1243,14 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
     }
 
     const [, year, month, day, hour, minute] = match;
-    return new Date(
-      Date.UTC(
-        Number(year),
-        Number(month) - 1,
-        Number(day),
-        Number(hour),
-        Number(minute),
-      ),
-    ).toISOString();
+    return this.zonedDateTimeToUtcIso(
+      Number(year),
+      Number(month),
+      Number(day),
+      Number(hour),
+      Number(minute),
+      timeZone,
+    );
   }
 
   private formatDate(date: Date, timeZone: string) {
@@ -1031,6 +1259,99 @@ export class SpeakingClubTelegramService implements OnModuleInit, OnModuleDestro
       timeStyle: 'short',
       timeZone,
     }).format(new Date(date));
+  }
+
+  private buildStudentSessionButtons(booking) {
+    if (
+      booking.uniqueZoomUrl &&
+      this.canUseTelegramUrlButton(booking.uniqueZoomUrl)
+    ) {
+      return [[Markup.button.url('Open Zoom', booking.uniqueZoomUrl)]];
+    }
+
+    return [];
+  }
+
+  private async replyWithOptionalKeyboard(ctx, text: string, buttons) {
+    if (!buttons.length) {
+      await ctx.reply(text);
+      return;
+    }
+
+    await ctx.reply(text, Markup.inlineKeyboard(buttons));
+  }
+
+  private canUseTelegramUrlButton(value: string) {
+    try {
+      const url = new URL(value);
+      return url.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }
+
+  private zonedDateTimeToUtcIso(
+    year: number,
+    month: number,
+    day: number,
+    hour: number,
+    minute: number,
+    timeZone: string,
+  ) {
+    const localAsUtc = Date.UTC(year, month - 1, day, hour, minute);
+    let utc = localAsUtc - this.getTimeZoneOffsetMs(timeZone, new Date(localAsUtc));
+    utc = localAsUtc - this.getTimeZoneOffsetMs(timeZone, new Date(utc));
+    return new Date(utc).toISOString();
+  }
+
+  private getTimeZoneOffsetMs(timeZone: string, date: Date) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(date);
+    const values = Object.fromEntries(
+      parts
+        .filter((part) => part.type !== 'literal')
+        .map((part) => [part.type, Number(part.value)]),
+    );
+
+    const zonedAsUtc = Date.UTC(
+      values.year,
+      values.month - 1,
+      values.day,
+      values.hour,
+      values.minute,
+      values.second,
+    );
+    return zonedAsUtc - date.getTime();
+  }
+
+  private formatStudentLink(student) {
+    const name = this.escapeHtml(this.formatStudentName(student));
+    return `<a href="tg://user?id=${student.telegramUserId}">${name}</a>`;
+  }
+
+  private formatStudentName(student) {
+    if (student.user?.firstName) {
+      return student.user.firstName;
+    }
+    if (student.user?.username) {
+      return `@${student.user.username}`;
+    }
+    return `Telegram ${student.telegramUserId}`;
+  }
+
+  private escapeHtml(value: string) {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 
   private searchKey(ctx) {

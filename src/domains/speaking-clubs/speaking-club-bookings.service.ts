@@ -42,9 +42,13 @@ export class SpeakingClubBookingsService {
     const session = await this.speakingClubsService.findSessionForBooking(
       dto.sessionId,
     );
+    const timezone = await this.speakingClubsService.getUserTimezone(
+      dto.telegramUserId,
+      dto.timezone ?? session.timezone,
+    );
     const student = await this.speakingClubsService.ensureStudentProfile({
       telegramUserId: dto.telegramUserId,
-      timezone: dto.timezone ?? session.timezone,
+      timezone,
       learningLanguages: [session.club.targetLanguage],
     });
 

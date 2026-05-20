@@ -8,7 +8,8 @@ import {
 import { DATABASE_SCHEMAS } from '../../../../database/schemas';
 
 export enum UserRole {
-  User = 'USER',
+  Student = 'STUDENT',
+  Teacher = 'TEACHER',
   Admin = 'ADMIN',
 }
 
@@ -28,8 +29,11 @@ export class User {
   username: string | null;
 
   @Index()
-  @Column({ type: 'enum', enum: UserRole, default: UserRole.User })
+  @Column({ type: 'enum', enum: UserRole, default: UserRole.Student })
   role: UserRole;
+
+  @Column({ type: 'varchar', length: 80, nullable: true })
+  timezone: string | null;
 
   @CreateDateColumn()
   createdAt: Date;

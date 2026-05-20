@@ -1,11 +1,13 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { ArrayContains, MoreThan, Repository } from 'typeorm';
+import { ArrayContains, In, MoreThan, Repository } from 'typeorm';
 import { UsersService } from './users/users.service';
+import { UserRole } from './users/entities/user.entity';
 import { CreateClubSessionDto } from './dto/create-club-session.dto';
 import { CreateSpeakingClubDto } from './dto/create-speaking-club.dto';
 import { CreateStudentProfileDto } from './dto/create-student-profile.dto';
@@ -27,6 +29,8 @@ import { SpeakingClubZoomService } from './speaking-club-zoom.service';
 
 @Injectable()
 export class SpeakingClubsService {
+  private readonly teacherRoles = [UserRole.Teacher, UserRole.Admin];
+
   constructor(
     @InjectRepository(TeacherProfile)
     private readonly teacherProfilesRepository: Repository<TeacherProfile>,
@@ -43,12 +47,20 @@ export class SpeakingClubsService {
   async createTeacherProfile(dto: CreateTeacherProfileDto) {
     this.assertText(dto.telegramUserId, 'telegramUserId');
     this.assertText(dto.displayName, 'displayName');
-    this.assertText(dto.timezone, 'timezone');
 
     const user = await this.usersService.upsertTelegramUser({
       telegramId: dto.telegramUserId,
       firstName: dto.displayName,
+      timezone: dto.timezone,
     });
+    if (!this.canUseTeacherMode(user.role)) {
+      throw new ForbiddenException('Teacher role is required');
+    }
+    const timezone = dto.timezone ?? user.timezone;
+    if (!timezone) {
+      throw new BadRequestException('timezone is required');
+    }
+
     const existing = await this.teacherProfilesRepository.findOne({
       where: { telegramUserId: dto.telegramUserId },
     });
@@ -56,7 +68,7 @@ export class SpeakingClubsService {
     if (existing) {
       existing.displayName = dto.displayName;
       existing.bio = dto.bio ?? existing.bio;
-      existing.timezone = dto.timezone;
+      existing.timezone = timezone;
       return this.teacherProfilesRepository.save(existing);
     }
 
@@ -66,18 +78,19 @@ export class SpeakingClubsService {
         user,
         displayName: dto.displayName,
         bio: dto.bio ?? null,
-        timezone: dto.timezone,
+        timezone,
       }),
     );
   }
 
   async ensureStudentProfile(dto: CreateStudentProfileDto) {
     this.assertText(dto.telegramUserId, 'telegramUserId');
-    this.assertText(dto.timezone, 'timezone');
 
     const user = await this.usersService.upsertTelegramUser({
       telegramId: dto.telegramUserId,
+      timezone: dto.timezone,
     });
+    const timezone = dto.timezone ?? user.timezone ?? 'UTC';
     const existing = await this.studentProfilesRepository.findOne({
       where: { telegramUserId: dto.telegramUserId },
     });
@@ -86,7 +99,7 @@ export class SpeakingClubsService {
       existing.nativeLanguage = dto.nativeLanguage ?? existing.nativeLanguage;
       existing.learningLanguages =
         dto.learningLanguages ?? existing.learningLanguages;
-      existing.timezone = dto.timezone;
+      existing.timezone = timezone;
       return this.studentProfilesRepository.save(existing);
     }
 
@@ -96,7 +109,7 @@ export class SpeakingClubsService {
         user,
         nativeLanguage: dto.nativeLanguage ?? null,
         learningLanguages: dto.learningLanguages ?? [],
-        timezone: dto.timezone,
+        timezone,
       }),
     );
   }
@@ -119,8 +132,8 @@ export class SpeakingClubsService {
       throw new BadRequestException('price is required for paid clubs');
     }
 
-    const teacher = await this.teacherProfilesRepository.findOneBy({
-      id: dto.teacherId,
+    const teacher = await this.teacherProfilesRepository.findOne({
+      where: { id: dto.teacherId, user: { role: In(this.teacherRoles) } },
     });
     if (!teacher) {
       throw new NotFoundException('Teacher profile not found');
@@ -147,16 +160,23 @@ export class SpeakingClubsService {
 
   async createSession(dto: CreateClubSessionDto) {
     this.assertText(dto.startAt, 'startAt');
-    this.assertText(dto.timezone, 'timezone');
 
     const club = await this.clubsRepository.findOne({
-      where: { id: dto.clubId, isActive: true },
-      relations: { teacher: true },
+      where: {
+        id: dto.clubId,
+        isActive: true,
+        teacher: { user: { role: In(this.teacherRoles) } },
+      },
+      relations: { teacher: { user: true } },
     });
     if (!club) {
       throw new NotFoundException('Active speaking club not found');
     }
 
+    const timezone = dto.timezone ?? club.teacher.user.timezone ?? club.teacher.timezone;
+    if (!timezone) {
+      throw new BadRequestException('Teacher timezone is required');
+    }
     const startAt = this.parseDate(dto.startAt);
     const endAt = new Date(startAt.getTime() + club.durationMinutes * 60_000);
     const meeting = dto.zoomMeetingId
@@ -169,7 +189,7 @@ export class SpeakingClubsService {
           description: club.description,
           startAt,
           durationMinutes: club.durationMinutes,
-          timezone: dto.timezone,
+          timezone,
         });
 
     return this.sessionsRepository.save(
@@ -178,7 +198,7 @@ export class SpeakingClubsService {
         teacher: club.teacher,
         startAt,
         endAt,
-        timezone: dto.timezone,
+        timezone,
         status: ClubSessionStatus.Scheduled,
         zoomJoinUrl: meeting.joinUrl,
         zoomMeetingId: meeting.meetingId,
@@ -188,7 +208,12 @@ export class SpeakingClubsService {
 
   async search(dto: SearchSpeakingClubsDto) {
     this.assertEnum(dto.targetLanguage, SpeakingClubLanguage, 'targetLanguage');
-    this.assertEnum(dto.supportLanguage, SpeakingClubLanguage, 'supportLanguage');
+    const supportLanguages = dto.supportLanguages ?? [dto.supportLanguage];
+    this.assertEnumArray(
+      supportLanguages,
+      SpeakingClubLanguage,
+      'supportLanguages',
+    );
     this.assertEnum(dto.level, SpeakingClubLevel, 'level');
 
     const clubs = await this.clubsRepository.find({
@@ -204,7 +229,11 @@ export class SpeakingClubsService {
 
     return Promise.all(
       clubs
-        .filter((club) => club.supportLanguages.includes(dto.supportLanguage))
+        .filter((club) =>
+          club.supportLanguages.some((language) =>
+            supportLanguages.includes(language),
+          ),
+        )
         .map(async (club) => ({
           ...club,
           upcomingSessions: await this.sessionsRepository.find({
@@ -213,6 +242,7 @@ export class SpeakingClubsService {
               status: ClubSessionStatus.Scheduled,
               startAt: MoreThan(now),
             },
+            relations: { bookings: true },
             order: { startAt: 'ASC' },
             take: 3,
           }),
@@ -222,7 +252,7 @@ export class SpeakingClubsService {
 
   async listTeacherClubs(telegramUserId: string) {
     const teacher = await this.teacherProfilesRepository.findOne({
-      where: { telegramUserId },
+      where: { telegramUserId, user: { role: In(this.teacherRoles) } },
     });
     if (!teacher) {
       return [];
@@ -236,7 +266,7 @@ export class SpeakingClubsService {
 
   async getTeacherClub(telegramUserId: string, clubId: number) {
     const teacher = await this.teacherProfilesRepository.findOne({
-      where: { telegramUserId },
+      where: { telegramUserId, user: { role: In(this.teacherRoles) } },
     });
     if (!teacher) {
       throw new NotFoundException('Teacher profile not found');
@@ -268,6 +298,35 @@ export class SpeakingClubsService {
     return { club, sessions };
   }
 
+  async listTeacherClubSessions(telegramUserId: string, clubId: number) {
+    const { club } = await this.getTeacherClub(telegramUserId, clubId);
+
+    return this.sessionsRepository.find({
+      where: { club: { id: club.id } },
+      relations: { bookings: true },
+      order: { startAt: 'DESC' },
+    });
+  }
+
+  async getTeacherClubSession(telegramUserId: string, sessionId: number) {
+    const session = await this.sessionsRepository.findOne({
+      where: { id: sessionId },
+      relations: {
+        club: { teacher: { user: true } },
+        bookings: { student: { user: true } },
+      },
+    });
+    if (
+      !session ||
+      session.club.teacher.telegramUserId !== telegramUserId ||
+      !this.canUseTeacherMode(session.club.teacher.user.role)
+    ) {
+      throw new NotFoundException('Session not found');
+    }
+
+    return session;
+  }
+
   async findSessionForBooking(sessionId: number) {
     const session = await this.sessionsRepository.findOne({
       where: {
@@ -286,8 +345,23 @@ export class SpeakingClubsService {
 
   async getTeacherByTelegramId(telegramUserId: string) {
     return this.teacherProfilesRepository.findOne({
-      where: { telegramUserId },
+      where: { telegramUserId, user: { role: In(this.teacherRoles) } },
+      relations: { user: true },
     });
+  }
+
+  async getUserTimezone(telegramUserId: string, fallback = 'UTC') {
+    const user = await this.usersService.findByTelegramId(telegramUserId);
+    return user?.timezone ?? fallback;
+  }
+
+  async setUserTimezone(telegramUserId: string, timezone: string) {
+    this.assertText(timezone, 'timezone');
+    return this.usersService.setTimezone(telegramUserId, timezone);
+  }
+
+  private canUseTeacherMode(role: UserRole) {
+    return this.teacherRoles.includes(role);
   }
 
   private parseDate(value: string) {

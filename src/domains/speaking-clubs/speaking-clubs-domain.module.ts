@@ -6,12 +6,14 @@ import { ClubSession } from './entities/club-session.entity';
 import { Payment } from './entities/payment.entity';
 import { SessionAttendance } from './entities/session-attendance.entity';
 import { SessionBooking } from './entities/session-booking.entity';
+import { SessionReminder } from './entities/session-reminder.entity';
 import { SpeakingClub } from './entities/speaking-club.entity';
 import { StudentProfile } from './entities/student-profile.entity';
 import { TeacherProfile } from './entities/teacher-profile.entity';
 import { SpeakingClubAnalyticsService } from './speaking-club-analytics.service';
 import { SpeakingClubBookingsService } from './speaking-club-bookings.service';
 import { SpeakingClubPaymentService } from './speaking-club-payment.service';
+import { SpeakingClubSessionRemindersService } from './speaking-club-session-reminders.service';
 import { SpeakingClubZoomService } from './speaking-club-zoom.service';
 import { SpeakingClubTelegramController } from './telegram/speaking-club-telegram.controller';
 import { SpeakingClubTelegramService } from './telegram/speaking-club-telegram.service';
@@ -27,6 +29,7 @@ import { SpeakingClubsService } from './speaking-clubs.service';
       SpeakingClub,
       ClubSession,
       SessionBooking,
+      SessionReminder,
       Payment,
       SessionAttendance,
       ClubReview,
@@ -39,6 +42,7 @@ import { SpeakingClubsService } from './speaking-clubs.service';
     SpeakingClubAnalyticsService,
     SpeakingClubZoomService,
     SpeakingClubPaymentService,
+    SpeakingClubSessionRemindersService,
     SpeakingClubTelegramService,
   ],
 })
