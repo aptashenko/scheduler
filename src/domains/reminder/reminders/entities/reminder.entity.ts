@@ -39,6 +39,13 @@ export class Reminder {
   remindAt: Date;
 
   @Index()
+  @Column({ name: 'event_at', type: 'timestamptz', nullable: true })
+  eventAt: Date | null;
+
+  @Column({ name: 'remind_before_minutes', type: 'int', nullable: true })
+  remindBeforeMinutes: number | null;
+
+  @Index()
   @Column({
     type: 'enum',
     enum: ReminderStatus,
@@ -48,6 +55,14 @@ export class Reminder {
 
   @Column({ name: 'bull_job_id', type: 'varchar', length: 128, nullable: true })
   bullJobId: string | null;
+
+  @Column({
+    name: 'before_bull_job_id',
+    type: 'varchar',
+    length: 128,
+    nullable: true,
+  })
+  beforeBullJobId: string | null;
 
   @ManyToOne(() => Users, (user) => user.reminders, {
     createForeignKeyConstraints: false,
@@ -63,4 +78,7 @@ export class Reminder {
 
   @Column({ name: 'sent_at', type: 'timestamptz', nullable: true })
   sentAt: Date | null;
+
+  @Column({ name: 'before_sent_at', type: 'timestamptz', nullable: true })
+  beforeSentAt: Date | null;
 }

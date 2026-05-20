@@ -23,8 +23,23 @@ type MemoirBotMode = 'polling' | 'webhook';
 type ReminderWizardState =
   | { step: 'awaiting_text' }
   | { step: 'awaiting_datetime'; text: string }
-  | { step: 'awaiting_confirmation'; parsed: ReminderParseResult; text: string }
-  | { step: 'awaiting_recipients'; parsed: ReminderParseResult; text: string };
+  | {
+      step: 'awaiting_remind_before';
+      parsed: ReminderParseResult;
+      text: string;
+    }
+  | {
+      step: 'awaiting_confirmation';
+      parsed: ReminderParseResult;
+      remindBeforeMinutes: number;
+      text: string;
+    }
+  | {
+      step: 'awaiting_recipients';
+      parsed: ReminderParseResult;
+      remindBeforeMinutes: number;
+      text: string;
+    };
 
 const CREATE_EVENT_LABEL = '📝 Create new';
 const TIME_ZONE_LABEL = '🌍 Select timezone';
@@ -32,6 +47,7 @@ const CHANGE_TIME_ZONE_LABEL = 'Change';
 const VIEW_EVENTS_LABEL = '📅 Show all';
 const NEXT_LABEL = 'Only me';
 const timeZones = ['Europe/Paris', 'Europe/Kyiv', 'Europe/Warsaw', 'Europe/London', 'America/New_York']
+const REMIND_BEFORE_OPTIONS = [5, 10, 15, 30, 60];
 
 
 @Injectable()
@@ -226,6 +242,10 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
         );
         return;
       }
+      if (query.data?.startsWith('remind_before:')) {
+        await this.handleRemindBefore(ctx, query.data, query.message.chat.id);
+        return;
+      }
 
       const calendarMessageId = calendar.chats.get(query.message.chat.id);
       if (query.message.message_id !== calendarMessageId) {
@@ -254,16 +274,12 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
             source: 'strict',
             text: state.text,
           },
-          step: 'awaiting_confirmation',
+          step: 'awaiting_remind_before',
           text: state.text,
         } satisfies ReminderWizardState;
 
         this.setWizardState(ctx.from.id, query.message.chat.id, parsed);
-        await this.replyReminderConfirmation(ctx, {
-          remindAt: parsed.parsed.remindAt,
-          source: 'strict',
-          text: state.text,
-        });
+        await this.replyRemindBeforeOptions(ctx);
       }
     });
 
@@ -304,6 +320,10 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       if (state?.step === 'awaiting_datetime') {
         await ctx.reply('Choose date and time in calendar.');
         calendar.startNavCalendar(ctx.message);
+        return;
+      }
+      if (state?.step === 'awaiting_remind_before') {
+        await this.replyRemindBeforeOptions(ctx);
         return;
       }
       if (state?.step === 'awaiting_recipients') {
@@ -398,10 +418,10 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
 
     this.setWizardState(ctx.from.id, ctx.chat.id, {
       parsed,
-      step: 'awaiting_confirmation',
+      step: 'awaiting_remind_before',
       text: parsed.text || input,
     });
-    await this.replyReminderConfirmation(ctx, parsed);
+    await this.replyRemindBeforeOptions(ctx);
   }
 
   private async replyReminderDateButtons(ctx: Context) {
@@ -465,7 +485,11 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       (reminder) =>
         reminder.telegramChatIds.includes(chatId) &&
         reminder.status === ReminderStatus.Pending &&
-        this.isSameDefaultTimeZoneDate(reminder.remindAt, targetDate, timeZone),
+        this.isSameDefaultTimeZoneDate(
+          reminder.eventAt ?? reminder.remindAt,
+          targetDate,
+          timeZone,
+        ),
     );
 
     if (reminders.length === 0) {
@@ -511,9 +535,24 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  private async replyRemindBeforeOptions(ctx: Context) {
+    await ctx.reply(
+      'When should I remind you before the main time?',
+      Markup.inlineKeyboard([
+        REMIND_BEFORE_OPTIONS.slice(0, 2).map((minutes) =>
+          Markup.button.callback(`${minutes} min`, `remind_before:${minutes}`),
+        ),
+        REMIND_BEFORE_OPTIONS.slice(2).map((minutes) =>
+          Markup.button.callback(`${minutes} min`, `remind_before:${minutes}`),
+        ),
+      ]),
+    );
+  }
+
   private async replyReminderConfirmation(
     ctx: Context,
     parsed: ReminderParseResult,
+    remindBeforeMinutes: number,
   ) {
     if (!parsed.remindAt) {
       return;
@@ -530,6 +569,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
         '',
         `Reminder: ${parsed.text}`,
         `Time: ${this.formatDateTime(new Date(parsed.remindAt), timeZone)}`,
+        `Also remind: ${remindBeforeMinutes} min before`,
       ].join('\n'),
       Markup.inlineKeyboard([
         [
@@ -538,6 +578,38 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
         ],
       ]),
     );
+  }
+
+  private async handleRemindBefore(
+    ctx: Context,
+    callbackData: string,
+    chatId: number,
+  ) {
+    if (!ctx.from) {
+      return;
+    }
+
+    const minutes = Number(callbackData.replace('remind_before:', ''));
+    if (!REMIND_BEFORE_OPTIONS.includes(minutes)) {
+      await ctx.answerCbQuery('Invalid reminder interval');
+      return;
+    }
+
+    const state = this.getWizardState(ctx.from.id, chatId);
+    if (state?.step !== 'awaiting_remind_before' || !state.parsed.remindAt) {
+      await ctx.answerCbQuery('Reminder not found');
+      return;
+    }
+
+    this.setWizardState(ctx.from.id, chatId, {
+      parsed: state.parsed,
+      remindBeforeMinutes: minutes,
+      step: 'awaiting_confirmation',
+      text: state.text,
+    });
+
+    await ctx.answerCbQuery();
+    await this.replyReminderConfirmation(ctx, state.parsed, minutes);
   }
 
   private async handleConfirmReminder(ctx: Context, chatId: number) {
@@ -553,6 +625,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
 
     this.setWizardState(ctx.from.id, chatId, {
       parsed: state.parsed,
+      remindBeforeMinutes: state.remindBeforeMinutes,
       step: 'awaiting_recipients',
       text: state.text,
     });
@@ -590,6 +663,8 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
         telegramChatIds: recipients.telegramChatIds,
         text: state.parsed.text,
         remindAt: state.parsed.remindAt,
+        eventAt: state.parsed.remindAt,
+        remindBeforeMinutes: state.remindBeforeMinutes,
       });
       await this.notifyAddedRecipients(
         reminder,
@@ -649,7 +724,9 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
   private async notifyAddedRecipients(
     reminder: {
       id: number;
+      eventAt?: Date | null;
       remindAt: Date;
+      remindBeforeMinutes?: number | null;
       status: string;
       text: string;
       telegramChatIds: string[];
@@ -677,7 +754,9 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
     telegramChatId: string,
     reminder: {
       id: number;
+      eventAt?: Date | null;
       remindAt: Date;
+      remindBeforeMinutes?: number | null;
       status: string;
       text: string;
       telegramChatIds: string[];
@@ -782,6 +861,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
 
   private getReminderDateOptions(
     reminders: Array<{
+      eventAt?: Date | null;
       remindAt: Date;
     }>,
     timeZone = getDefaultTimeZone(),
@@ -789,7 +869,10 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
     const dates = new Map<string, Date>();
 
     for (const reminder of reminders) {
-      const key = this.getDefaultTimeZoneDateKey(reminder.remindAt, timeZone);
+      const key = this.getDefaultTimeZoneDateKey(
+        reminder.eventAt ?? reminder.remindAt,
+        timeZone,
+      );
       if (!dates.has(key)) {
         dates.set(key, this.dateKeyToDefaultTimeZoneDate(key, timeZone));
       }
@@ -841,7 +924,9 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
   private async formatReminderCard(
     reminder: {
       id: number;
+      eventAt?: Date | null;
       remindAt: Date;
+      remindBeforeMinutes?: number | null;
       status: string;
       text: string;
       telegramChatIds: string[];
@@ -853,6 +938,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       users.length > 0
         ? users.map((user) => this.escapeHtml(user)).join(', ')
         : 'only you';
+    const eventAt = reminder.eventAt ?? reminder.remindAt;
 
     const message = [
       `<b>Reminder #${reminder.id}</b>`,
@@ -861,7 +947,13 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       this.escapeHtml(reminder.text),
       '',
       `🕒 <b>When</b>`,
-      this.formatDateTime(reminder.remindAt, timeZone),
+      this.formatDateTime(eventAt, timeZone),
+      '',
+      `⏱️ <b>Before</b>`,
+      reminder.remindBeforeMinutes === null ||
+      reminder.remindBeforeMinutes === undefined
+        ? 'not set'
+        : `${reminder.remindBeforeMinutes} min`,
       '',
       `👥 <b>Participants</b>`,
       formattedUsers

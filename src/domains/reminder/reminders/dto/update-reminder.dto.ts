@@ -5,5 +5,7 @@ export class UpdateReminderDto {
   telegramChatIds?: string[];
   text?: string;
   remindAt?: string;
+  eventAt?: string;
+  remindBeforeMinutes?: number | null;
   status?: ReminderStatus;
 }

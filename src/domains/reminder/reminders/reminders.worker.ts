@@ -9,6 +9,7 @@ import { createRedisConnection } from './reminder-queue.provider';
 
 type SendReminderJob = {
   reminderId: number;
+  type?: 'before' | 'main';
 };
 
 @Injectable()
@@ -63,21 +64,46 @@ export class RemindersWorker implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    const jobType = job.data.type ?? 'main';
+
     try {
       for (const telegramChatId of reminder.telegramChatIds) {
-        await this.reminderBotService.sendMessage(telegramChatId, reminder.text);
+        await this.reminderBotService.sendMessage(
+          telegramChatId,
+          this.getReminderMessage(reminder, jobType),
+        );
       }
 
-      reminder.status = ReminderStatus.Sent;
-      reminder.sentAt = new Date();
+      if (jobType === 'before') {
+        reminder.beforeSentAt = new Date();
+      } else {
+        reminder.status = ReminderStatus.Sent;
+        reminder.sentAt = new Date();
+      }
       await this.remindersRepository.save(reminder);
     } catch (error) {
       const attempts = job.opts.attempts ?? 1;
-      if (job.attemptsMade + 1 >= attempts) {
+      if (jobType === 'main' && job.attemptsMade + 1 >= attempts) {
         reminder.status = ReminderStatus.Failed;
         await this.remindersRepository.save(reminder);
       }
       throw error;
     }
+  }
+
+  private getReminderMessage(reminder: Reminder, jobType: 'before' | 'main') {
+    if (
+      jobType !== 'before' ||
+      reminder.remindBeforeMinutes === null ||
+      reminder.remindBeforeMinutes === undefined
+    ) {
+      return reminder.text;
+    }
+
+    return [
+      `In ${reminder.remindBeforeMinutes} minutes`,
+      '',
+      reminder.text,
+    ].join('\n');
   }
 }

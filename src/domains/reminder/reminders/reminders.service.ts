@@ -14,6 +14,8 @@ import { CreateReminderDto } from './dto/create-reminder.dto';
 import { UpdateReminderDto } from './dto/update-reminder.dto';
 import { Reminder, ReminderStatus } from './entities/reminder.entity';
 
+const REMIND_BEFORE_OPTIONS = [5, 10, 15, 30, 60];
+
 @Injectable()
 export class RemindersService implements OnModuleDestroy {
   constructor(
@@ -29,13 +31,23 @@ export class RemindersService implements OnModuleDestroy {
 
   async create(createReminderDto: CreateReminderDto) {
     this.assertCreateDto(createReminderDto);
+    const eventAtValue = createReminderDto.eventAt ?? createReminderDto.remindAt;
+    if (!eventAtValue) {
+      throw new BadRequestException('eventAt is required');
+    }
+    const eventAt = this.parseRemindAt(eventAtValue);
+    const remindBeforeMinutes = this.parseRemindBeforeMinutes(
+      createReminderDto.remindBeforeMinutes,
+    );
 
     const reminder = await this.remindersRepository.save(
       this.remindersRepository.create({
         userId: createReminderDto.userId,
         telegramChatIds: createReminderDto.telegramChatIds,
         text: createReminderDto.text,
-        remindAt: this.parseRemindAt(createReminderDto.remindAt),
+        remindAt: eventAt,
+        eventAt,
+        remindBeforeMinutes,
         status: ReminderStatus.Pending,
       }),
     );
@@ -60,6 +72,7 @@ export class RemindersService implements OnModuleDestroy {
   async update(id: number, updateReminderDto: UpdateReminderDto) {
     const reminder = await this.findOne(id);
     const previousJobId = reminder.bullJobId;
+    const previousBeforeJobId = reminder.beforeBullJobId;
 
     if (updateReminderDto.userId !== undefined) {
       reminder.userId = updateReminderDto.userId;
@@ -71,21 +84,36 @@ export class RemindersService implements OnModuleDestroy {
       reminder.text = updateReminderDto.text;
     }
     if (updateReminderDto.remindAt !== undefined) {
-      reminder.remindAt = this.parseRemindAt(updateReminderDto.remindAt);
+      const remindAt = this.parseRemindAt(updateReminderDto.remindAt);
+      reminder.remindAt = remindAt;
+      reminder.eventAt = remindAt;
+    }
+    if (updateReminderDto.eventAt !== undefined) {
+      const eventAt = this.parseRemindAt(updateReminderDto.eventAt);
+      reminder.eventAt = eventAt;
+      reminder.remindAt = eventAt;
+    }
+    if (updateReminderDto.remindBeforeMinutes !== undefined) {
+      reminder.remindBeforeMinutes =
+        updateReminderDto.remindBeforeMinutes === null
+          ? null
+          : this.parseRemindBeforeMinutes(updateReminderDto.remindBeforeMinutes);
     }
     if (updateReminderDto.status !== undefined) {
       reminder.status = updateReminderDto.status;
     }
 
     if (reminder.status === ReminderStatus.Cancelled) {
-      await this.removeJob(previousJobId);
+      await this.removeJobs(previousJobId, previousBeforeJobId);
       reminder.bullJobId = null;
+      reminder.beforeBullJobId = null;
       return this.remindersRepository.save(reminder);
     }
 
     if (reminder.status === ReminderStatus.Pending) {
-      await this.removeJob(previousJobId);
+      await this.removeJobs(previousJobId, previousBeforeJobId);
       reminder.bullJobId = null;
+      reminder.beforeBullJobId = null;
       await this.remindersRepository.save(reminder);
       return this.scheduleReminder(reminder);
     }
@@ -95,9 +123,10 @@ export class RemindersService implements OnModuleDestroy {
 
   async remove(id: number) {
     const reminder = await this.findOne(id);
-    await this.removeJob(reminder.bullJobId);
+    await this.removeJobs(reminder.bullJobId, reminder.beforeBullJobId);
     reminder.status = ReminderStatus.Cancelled;
     reminder.bullJobId = null;
+    reminder.beforeBullJobId = null;
     return this.remindersRepository.save(reminder);
   }
 
@@ -112,34 +141,65 @@ export class RemindersService implements OnModuleDestroy {
     );
 
     if (reminder.telegramChatIds.length === 0) {
-      await this.removeJob(reminder.bullJobId);
+      await this.removeJobs(reminder.bullJobId, reminder.beforeBullJobId);
       reminder.status = ReminderStatus.Cancelled;
       reminder.bullJobId = null;
+      reminder.beforeBullJobId = null;
     }
 
     return this.remindersRepository.save(reminder);
   }
 
   private async scheduleReminder(reminder: Reminder) {
+    let beforeJobId: string | null = null;
     try {
+      const eventAt = reminder.eventAt ?? reminder.remindAt;
+      const beforeAt =
+        reminder.remindBeforeMinutes === null ||
+        reminder.remindBeforeMinutes === undefined
+          ? null
+          : new Date(
+              eventAt.getTime() - reminder.remindBeforeMinutes * 60 * 1000,
+            );
+
+      const beforeJob =
+        beforeAt === null
+          ? null
+          : await this.reminderQueue.add(
+              SEND_REMINDER_JOB,
+              { reminderId: reminder.id, type: 'before' },
+              {
+                attempts: 3,
+                backoff: {
+                  type: 'exponential',
+                  delay: 30_000,
+                },
+                delay: this.getDelay(beforeAt),
+                removeOnComplete: true,
+                removeOnFail: false,
+              },
+            );
+      beforeJobId = beforeJob?.id ?? null;
       const job = await this.reminderQueue.add(
         SEND_REMINDER_JOB,
-        { reminderId: reminder.id },
+        { reminderId: reminder.id, type: 'main' },
         {
           attempts: 3,
           backoff: {
             type: 'exponential',
             delay: 30_000,
           },
-          delay: this.getDelay(reminder.remindAt),
+          delay: this.getDelay(eventAt),
           removeOnComplete: true,
           removeOnFail: false,
         },
       );
 
       reminder.bullJobId = job.id ?? null;
+      reminder.beforeBullJobId = beforeJobId;
       return this.remindersRepository.save(reminder);
     } catch (error) {
+      await this.removeJob(beforeJobId);
       reminder.status = ReminderStatus.Failed;
       await this.remindersRepository.save(reminder);
       throw new ServiceUnavailableException(
@@ -157,6 +217,12 @@ export class RemindersService implements OnModuleDestroy {
     await job?.remove();
   }
 
+  private async removeJobs(...jobIds: Array<string | null>) {
+    for (const jobId of jobIds) {
+      await this.removeJob(jobId);
+    }
+  }
+
   private parseRemindAt(value: string) {
     const remindAt = new Date(value);
     if (Number.isNaN(remindAt.getTime())) {
@@ -169,18 +235,30 @@ export class RemindersService implements OnModuleDestroy {
     return Math.max(remindAt.getTime() - Date.now(), 0);
   }
 
+  private parseRemindBeforeMinutes(value: number | undefined) {
+    if (!REMIND_BEFORE_OPTIONS.includes(Number(value))) {
+      throw new BadRequestException(
+        `remindBeforeMinutes must be one of: ${REMIND_BEFORE_OPTIONS.join(', ')}`,
+      );
+    }
+    return Number(value);
+  }
+
   private assertCreateDto(createReminderDto: CreateReminderDto) {
     if (!createReminderDto.userId) {
       throw new BadRequestException('userId is required');
     }
-    if (!createReminderDto.telegramChatIds.length) {
+    if (!createReminderDto.telegramChatIds?.length) {
       throw new BadRequestException('telegramChatId is required');
     }
     if (!createReminderDto.text?.trim()) {
       throw new BadRequestException('text is required');
     }
-    if (!createReminderDto.remindAt) {
-      throw new BadRequestException('remindAt is required');
+    if (!createReminderDto.eventAt && !createReminderDto.remindAt) {
+      throw new BadRequestException('eventAt is required');
+    }
+    if (createReminderDto.remindBeforeMinutes === undefined) {
+      throw new BadRequestException('remindBeforeMinutes is required');
     }
   }
 }
