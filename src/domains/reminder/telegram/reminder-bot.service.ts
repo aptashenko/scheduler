@@ -432,18 +432,6 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
     input: string,
     calendar: Calendar,
   ) {
-    if (!this.reminderAiService.isConfigured()) {
-      this.setWizardState(ctx.from.id, ctx.chat.id, {
-        step: 'awaiting_datetime',
-        text: input,
-      });
-      await ctx.reply(
-        'I could not recognize the date. Please select the date and time manually.',
-      );
-      calendar.startNavCalendar(ctx.message);
-      return;
-    }
-
     const timeZone = await this.getChatTimeZone(String(ctx.from.id));
     const parsed = await this.reminderParserService.parse(input, {
       timezone: timeZone,
@@ -744,6 +732,9 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
         '',
         `Reminder: ${parsed.text}`,
         `Time: ${this.formatDateTime(new Date(parsed.remindAt), timeZone)}`,
+        ...(parsed.recurrence
+          ? [`Repeat: ${this.formatRecurrence(parsed.recurrence)}`]
+          : []),
         `Also remind: ${remindBeforeMinutes} min before`,
       ].join('\n'),
       Markup.inlineKeyboard([
@@ -851,6 +842,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
         text: state.parsed.text,
         remindAt: state.parsed.remindAt,
         eventAt: state.parsed.remindAt,
+        recurrence: state.parsed.recurrence ?? undefined,
         remindBeforeMinutes: state.remindBeforeMinutes,
       });
       await this.notifyAddedRecipients(
@@ -1063,6 +1055,25 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       timeZone,
       year: 'numeric',
     });
+  }
+
+  private formatRecurrence(
+    recurrence: NonNullable<ReminderParseResult['recurrence']>,
+  ) {
+    if (recurrence.frequency === 'monthly') {
+      return `every month on day ${recurrence.dayOfMonth}`;
+    }
+
+    const weekdays: Record<number, string> = {
+      1: 'Monday',
+      2: 'Tuesday',
+      3: 'Wednesday',
+      4: 'Thursday',
+      5: 'Friday',
+      6: 'Saturday',
+      7: 'Sunday',
+    };
+    return `every ${weekdays[recurrence.weekday ?? 0] ?? 'week'}`;
   }
 
   private getReminderDateOptions(

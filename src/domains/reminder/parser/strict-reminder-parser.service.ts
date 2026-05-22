@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ParsedReminder } from '../ai/reminder-ai.service';
+import { ReminderRecurrenceFrequency } from '../reminders/entities/reminder-series.entity';
 
 type DateMatch = {
   index: number;
@@ -55,6 +56,11 @@ export class StrictReminderParserService {
       return null;
     }
 
+    const recurring = this.parseRecurring(normalized, now, user);
+    if (recurring) {
+      return recurring;
+    }
+
     const match =
       this.parseRelative(normalized, now) ??
       this.parseTodayTomorrow(normalized, now, user) ??
@@ -69,6 +75,77 @@ export class StrictReminderParserService {
       remindAt: match.remindAt.toISOString(),
       text: this.cleanText(normalized, match),
     };
+  }
+
+  private parseRecurring(
+    input: string,
+    now: Date,
+    user?: UserTimeZone,
+  ): ParsedReminder | null {
+    const weekly = input.match(
+      /(?:^|\s)кажд(?:ый|ую|ое)\s+(понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)\s+(?:в\s+)?(\d{1,2})(?::(\d{2}))?(?=\s|$)/i,
+    );
+    if (weekly?.index !== undefined) {
+      const weekday = this.parseWeekday(weekly[1]);
+      const match = this.toDateMatch(
+        weekly,
+        this.getNextWeeklyDate(
+          weekday,
+          Number(weekly[2]),
+          Number(weekly[3] ?? 0),
+          now,
+          user,
+        ),
+      );
+      if (match.remindAt.getTime() > now.getTime()) {
+        return {
+          recurrence: {
+            frequency: ReminderRecurrenceFrequency.Weekly,
+            timezone: getDefaultTimeZone(user),
+            weekday,
+          },
+          remindAt: match.remindAt.toISOString(),
+          text: this.cleanText(input, match),
+        };
+      }
+    }
+
+    const monthly =
+      input.match(
+        /(?:^|\s)кажд(?:ое|ого)\s+(\d{1,2})\s+числ(?:о|а)\s+(?:в\s+)?(\d{1,2})(?::(\d{2}))?(?=\s|$)/i,
+      ) ??
+      input.match(
+        /(?:^|\s)(\d{1,2})\s+числа\s+каждого\s+месяца\s+(?:в\s+)?(\d{1,2})(?::(\d{2}))?(?=\s|$)/i,
+      );
+    if (monthly?.index !== undefined) {
+      const dayOfMonth = Number(monthly[1]);
+      if (dayOfMonth < 1 || dayOfMonth > 31) {
+        return null;
+      }
+      const match = this.toDateMatch(
+        monthly,
+        this.getNextMonthlyDate(
+          dayOfMonth,
+          Number(monthly[2]),
+          Number(monthly[3] ?? 0),
+          now,
+          user,
+        ),
+      );
+      if (match.remindAt.getTime() > now.getTime()) {
+        return {
+          recurrence: {
+            dayOfMonth,
+            frequency: ReminderRecurrenceFrequency.Monthly,
+            timezone: getDefaultTimeZone(user),
+          },
+          remindAt: match.remindAt.toISOString(),
+          text: this.cleanText(input, match),
+        };
+      }
+    }
+
+    return null;
   }
 
   private parseRelative(input: string, now: Date): DateMatch | null {
@@ -200,6 +277,93 @@ export class StrictReminderParserService {
 
   private normalizeYear(year: number) {
     return year < 100 ? 2000 + year : year;
+  }
+
+  private parseWeekday(value: string) {
+    const weekdays: Record<string, number> = {
+      воскресенье: 7,
+      вторник: 2,
+      понедельник: 1,
+      пятницу: 5,
+      среду: 3,
+      субботу: 6,
+      четверг: 4,
+    };
+
+    return weekdays[value.toLowerCase()];
+  }
+
+  private getNextWeeklyDate(
+    weekday: number,
+    hour: number,
+    minute: number,
+    now: Date,
+    user?: UserTimeZone,
+  ) {
+    const nowParts = getTimeZoneDateParts(now, getDefaultTimeZone(user));
+    const startDate = new Date(
+      Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day),
+    );
+    for (let dayOffset = 0; dayOffset <= 7; dayOffset += 1) {
+      const targetDate = new Date(startDate);
+      targetDate.setUTCDate(targetDate.getUTCDate() + dayOffset);
+      if (this.getIsoWeekday(targetDate) !== weekday) {
+        continue;
+      }
+
+      const remindAt = dateTimeInDefaultTimeZoneToDate(
+        targetDate.getUTCFullYear(),
+        targetDate.getUTCMonth() + 1,
+        targetDate.getUTCDate(),
+        hour,
+        minute,
+        user,
+      );
+      if (remindAt.getTime() > now.getTime()) {
+        return remindAt;
+      }
+    }
+
+    return now;
+  }
+
+  private getNextMonthlyDate(
+    dayOfMonth: number,
+    hour: number,
+    minute: number,
+    now: Date,
+    user?: UserTimeZone,
+  ) {
+    const nowParts = getTimeZoneDateParts(now, getDefaultTimeZone(user));
+    for (let monthOffset = 0; monthOffset <= 12; monthOffset += 1) {
+      const targetDate = new Date(
+        Date.UTC(nowParts.year, nowParts.month - 1 + monthOffset, dayOfMonth),
+      );
+      const expectedMonth = new Date(
+        Date.UTC(nowParts.year, nowParts.month - 1 + monthOffset, 1),
+      ).getUTCMonth();
+      if (targetDate.getUTCMonth() !== expectedMonth) {
+        continue;
+      }
+
+      const remindAt = dateTimeInDefaultTimeZoneToDate(
+        targetDate.getUTCFullYear(),
+        targetDate.getUTCMonth() + 1,
+        targetDate.getUTCDate(),
+        hour,
+        minute,
+        user,
+      );
+      if (remindAt.getTime() > now.getTime()) {
+        return remindAt;
+      }
+    }
+
+    return now;
+  }
+
+  private getIsoWeekday(date: Date) {
+    return date.getUTCDay() || 7;
   }
 
   private toDateMatch(match: RegExpMatchArray, remindAt: Date): DateMatch {

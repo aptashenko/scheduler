@@ -80,4 +80,38 @@ describe('StrictReminderParserService', () => {
       text: 'Протестировать',
     });
   });
+
+  it('parses weekly recurring reminder', () => {
+    const result = service.parse(
+      'Каждый понедельник в 09:00 написать дейлик',
+      new Date('2026-05-22T10:00:00+02:00'),
+    );
+
+    expect(result).toEqual({
+      recurrence: {
+        frequency: 'weekly',
+        timezone: 'Europe/Paris',
+        weekday: 1,
+      },
+      remindAt: new Date('2026-05-25T09:00:00+02:00').toISOString(),
+      text: 'написать дейлик',
+    });
+  });
+
+  it('parses monthly recurring reminder after this month date passed', () => {
+    const result = service.parse(
+      'Каждое 15 число в 10:00 оплатить аренду',
+      new Date('2026-05-22T10:00:00+02:00'),
+    );
+
+    expect(result).toEqual({
+      recurrence: {
+        dayOfMonth: 15,
+        frequency: 'monthly',
+        timezone: 'Europe/Paris',
+      },
+      remindAt: new Date('2026-06-15T10:00:00+02:00').toISOString(),
+      text: 'оплатить аренду',
+    });
+  });
 });

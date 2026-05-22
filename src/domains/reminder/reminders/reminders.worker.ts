@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Job, Worker } from 'bullmq';
 import { Repository } from 'typeorm';
@@ -6,6 +11,7 @@ import { ReminderBotService } from '../telegram/reminder-bot.service';
 import { REMINDER_QUEUE, SEND_REMINDER_JOB } from './constants';
 import { Reminder, ReminderStatus } from './entities/reminder.entity';
 import { createRedisConnection } from './reminder-queue.provider';
+import { RemindersService } from './reminders.service';
 
 type SendReminderJob = {
   reminderId: number;
@@ -21,6 +27,7 @@ export class RemindersWorker implements OnModuleInit, OnModuleDestroy {
     @InjectRepository(Reminder)
     private readonly remindersRepository: Repository<Reminder>,
     private readonly reminderBotService: ReminderBotService,
+    private readonly remindersService: RemindersService,
   ) {}
 
   onModuleInit() {
@@ -60,7 +67,9 @@ export class RemindersWorker implements OnModuleInit, OnModuleDestroy {
     }
 
     if (reminder.status !== ReminderStatus.Pending) {
-      this.logger.log(`Reminder ${reminder.id} skipped with status ${reminder.status}`);
+      this.logger.log(
+        `Reminder ${reminder.id} skipped with status ${reminder.status}`,
+      );
       return;
     }
 
@@ -81,6 +90,16 @@ export class RemindersWorker implements OnModuleInit, OnModuleDestroy {
         reminder.sentAt = new Date();
       }
       await this.remindersRepository.save(reminder);
+      if (jobType === 'main' && reminder.seriesId) {
+        try {
+          await this.remindersService.scheduleNextSeriesOccurrence(reminder);
+        } catch (error) {
+          this.logger.error(
+            `Failed to schedule next occurrence for reminder series ${reminder.seriesId}`,
+            error,
+          );
+        }
+      }
     } catch (error) {
       const attempts = job.opts.attempts ?? 1;
       if (jobType === 'main' && job.attemptsMade + 1 >= attempts) {

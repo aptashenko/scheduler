@@ -9,6 +9,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { DATABASE_SCHEMAS } from '../../../../database/schemas';
+import { ReminderSeries } from './reminder-series.entity';
 import { Users } from './users.entity';
 
 export enum ReminderStatus {
@@ -26,6 +27,10 @@ export class Reminder {
   @Index()
   @Column({ name: 'user_id', type: 'bigint' })
   userId: string;
+
+  @Index()
+  @Column({ name: 'series_id', type: 'int', nullable: true })
+  seriesId: number | null;
 
   @Index()
   @Column({ name: 'telegram_chat_ids', type: 'text', array: true })
@@ -69,6 +74,13 @@ export class Reminder {
   })
   @JoinColumn({ name: 'user_id', referencedColumnName: 'telegramId' })
   user: Users;
+
+  @ManyToOne(() => ReminderSeries, (series) => series.reminders, {
+    createForeignKeyConstraints: false,
+    nullable: true,
+  })
+  @JoinColumn({ name: 'series_id' })
+  series?: ReminderSeries | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

@@ -10,9 +10,18 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Job, Queue } from 'bullmq';
 import { Repository } from 'typeorm';
 import { REMINDER_QUEUE_TOKEN, SEND_REMINDER_JOB } from './constants';
-import { CreateReminderDto } from './dto/create-reminder.dto';
+import {
+  CreateReminderDto,
+  ReminderRecurrenceDto,
+} from './dto/create-reminder.dto';
 import { UpdateReminderDto } from './dto/update-reminder.dto';
+import {
+  ReminderRecurrenceFrequency,
+  ReminderSeries,
+  ReminderSeriesStatus,
+} from './entities/reminder-series.entity';
 import { Reminder, ReminderStatus } from './entities/reminder.entity';
+import { dateTimeInDefaultTimeZoneToDate } from '../parser/strict-reminder-parser.service';
 
 const REMIND_BEFORE_OPTIONS = [5, 10, 15, 30, 60];
 
@@ -21,6 +30,8 @@ export class RemindersService implements OnModuleDestroy {
   constructor(
     @InjectRepository(Reminder)
     private readonly remindersRepository: Repository<Reminder>,
+    @InjectRepository(ReminderSeries)
+    private readonly reminderSeriesRepository: Repository<ReminderSeries>,
     @Inject(REMINDER_QUEUE_TOKEN)
     private readonly reminderQueue: Queue,
   ) {}
@@ -31,7 +42,8 @@ export class RemindersService implements OnModuleDestroy {
 
   async create(createReminderDto: CreateReminderDto) {
     this.assertCreateDto(createReminderDto);
-    const eventAtValue = createReminderDto.eventAt ?? createReminderDto.remindAt;
+    const eventAtValue =
+      createReminderDto.eventAt ?? createReminderDto.remindAt;
     if (!eventAtValue) {
       throw new BadRequestException('eventAt is required');
     }
@@ -39,9 +51,18 @@ export class RemindersService implements OnModuleDestroy {
     const remindBeforeMinutes = this.parseRemindBeforeMinutes(
       createReminderDto.remindBeforeMinutes,
     );
+    const series = createReminderDto.recurrence
+      ? await this.createSeries(
+          createReminderDto,
+          createReminderDto.recurrence,
+          eventAt,
+          remindBeforeMinutes,
+        )
+      : null;
 
     const reminder = await this.remindersRepository.save(
       this.remindersRepository.create({
+        seriesId: series?.id ?? null,
         userId: createReminderDto.userId,
         telegramChatIds: createReminderDto.telegramChatIds,
         text: createReminderDto.text,
@@ -97,7 +118,9 @@ export class RemindersService implements OnModuleDestroy {
       reminder.remindBeforeMinutes =
         updateReminderDto.remindBeforeMinutes === null
           ? null
-          : this.parseRemindBeforeMinutes(updateReminderDto.remindBeforeMinutes);
+          : this.parseRemindBeforeMinutes(
+              updateReminderDto.remindBeforeMinutes,
+            );
     }
     if (updateReminderDto.status !== undefined) {
       reminder.status = updateReminderDto.status;
@@ -127,6 +150,7 @@ export class RemindersService implements OnModuleDestroy {
     reminder.status = ReminderStatus.Cancelled;
     reminder.bullJobId = null;
     reminder.beforeBullJobId = null;
+    await this.cancelSeries(reminder.seriesId);
     return this.remindersRepository.save(reminder);
   }
 
@@ -147,7 +171,41 @@ export class RemindersService implements OnModuleDestroy {
       reminder.beforeBullJobId = null;
     }
 
+    await this.detachSeriesChatId(reminder.seriesId, telegramChatId);
     return this.remindersRepository.save(reminder);
+  }
+
+  async scheduleNextSeriesOccurrence(reminder: Reminder) {
+    if (!reminder.seriesId) {
+      return null;
+    }
+
+    const series = await this.reminderSeriesRepository.findOneBy({
+      id: reminder.seriesId,
+      status: ReminderSeriesStatus.Active,
+    });
+    if (!series) {
+      return null;
+    }
+
+    const eventAt = this.getNextSeriesEventAt(
+      series,
+      reminder.eventAt ?? reminder.remindAt,
+    );
+    const nextReminder = await this.remindersRepository.save(
+      this.remindersRepository.create({
+        eventAt,
+        remindAt: eventAt,
+        remindBeforeMinutes: series.remindBeforeMinutes,
+        seriesId: series.id,
+        status: ReminderStatus.Pending,
+        telegramChatIds: series.telegramChatIds,
+        text: series.text,
+        userId: series.userId,
+      }),
+    );
+
+    return this.scheduleReminder(nextReminder);
   }
 
   private async scheduleReminder(reminder: Reminder) {
@@ -221,6 +279,173 @@ export class RemindersService implements OnModuleDestroy {
     for (const jobId of jobIds) {
       await this.removeJob(jobId);
     }
+  }
+
+  private async createSeries(
+    createReminderDto: CreateReminderDto,
+    recurrence: ReminderRecurrenceDto,
+    eventAt: Date,
+    remindBeforeMinutes: number,
+  ) {
+    this.assertRecurrence(recurrence);
+    const localTime = this.getTimeZoneDateParts(eventAt, recurrence.timezone);
+
+    return this.reminderSeriesRepository.save(
+      this.reminderSeriesRepository.create({
+        dayOfMonth: recurrence.dayOfMonth ?? null,
+        frequency: recurrence.frequency,
+        hour: localTime.hour,
+        minute: localTime.minute,
+        remindBeforeMinutes,
+        status: ReminderSeriesStatus.Active,
+        telegramChatIds: createReminderDto.telegramChatIds,
+        text: createReminderDto.text,
+        timezone: recurrence.timezone,
+        userId: createReminderDto.userId,
+        weekday: recurrence.weekday ?? null,
+      }),
+    );
+  }
+
+  private async cancelSeries(seriesId: number | null) {
+    if (!seriesId) {
+      return;
+    }
+
+    await this.reminderSeriesRepository.update(seriesId, {
+      status: ReminderSeriesStatus.Cancelled,
+    });
+  }
+
+  private async detachSeriesChatId(
+    seriesId: number | null,
+    telegramChatId: string,
+  ) {
+    if (!seriesId) {
+      return;
+    }
+
+    const series = await this.reminderSeriesRepository.findOneBy({
+      id: seriesId,
+    });
+    if (!series || !series.telegramChatIds.includes(telegramChatId)) {
+      return;
+    }
+
+    series.telegramChatIds = series.telegramChatIds.filter(
+      (chatId) => chatId !== telegramChatId,
+    );
+    if (series.telegramChatIds.length === 0) {
+      series.status = ReminderSeriesStatus.Cancelled;
+    }
+    await this.reminderSeriesRepository.save(series);
+  }
+
+  private assertRecurrence(recurrence: ReminderRecurrenceDto) {
+    if (!recurrence.timezone?.trim()) {
+      throw new BadRequestException('recurrence timezone is required');
+    }
+
+    if (
+      recurrence.frequency !== ReminderRecurrenceFrequency.Weekly &&
+      recurrence.frequency !== ReminderRecurrenceFrequency.Monthly
+    ) {
+      throw new BadRequestException('recurrence frequency is not supported');
+    }
+
+    const weekday = recurrence.weekday;
+    if (
+      recurrence.frequency === ReminderRecurrenceFrequency.Weekly &&
+      (typeof weekday !== 'number' ||
+        !Number.isInteger(weekday) ||
+        weekday < 1 ||
+        weekday > 7)
+    ) {
+      throw new BadRequestException('weekly recurrence weekday must be 1-7');
+    }
+
+    const dayOfMonth = recurrence.dayOfMonth;
+    if (
+      recurrence.frequency === ReminderRecurrenceFrequency.Monthly &&
+      (typeof dayOfMonth !== 'number' ||
+        !Number.isInteger(dayOfMonth) ||
+        dayOfMonth < 1 ||
+        dayOfMonth > 31)
+    ) {
+      throw new BadRequestException(
+        'monthly recurrence dayOfMonth must be 1-31',
+      );
+    }
+  }
+
+  private getNextSeriesEventAt(series: ReminderSeries, currentEventAt: Date) {
+    const current = this.getTimeZoneDateParts(currentEventAt, series.timezone);
+    if (series.frequency === ReminderRecurrenceFrequency.Weekly) {
+      const nextDate = new Date(
+        Date.UTC(current.year, current.month - 1, current.day + 7),
+      );
+      return dateTimeInDefaultTimeZoneToDate(
+        nextDate.getUTCFullYear(),
+        nextDate.getUTCMonth() + 1,
+        nextDate.getUTCDate(),
+        series.hour,
+        series.minute,
+        { timezone: series.timezone },
+      );
+    }
+
+    for (let monthOffset = 1; monthOffset <= 12; monthOffset += 1) {
+      const nextDate = new Date(
+        Date.UTC(
+          current.year,
+          current.month - 1 + monthOffset,
+          series.dayOfMonth ?? 1,
+        ),
+      );
+      const expectedMonth = new Date(
+        Date.UTC(current.year, current.month - 1 + monthOffset, 1),
+      ).getUTCMonth();
+      if (nextDate.getUTCMonth() !== expectedMonth) {
+        continue;
+      }
+
+      return dateTimeInDefaultTimeZoneToDate(
+        nextDate.getUTCFullYear(),
+        nextDate.getUTCMonth() + 1,
+        nextDate.getUTCDate(),
+        series.hour,
+        series.minute,
+        { timezone: series.timezone },
+      );
+    }
+
+    throw new BadRequestException('Could not calculate next recurrence');
+  }
+
+  private getTimeZoneDateParts(date: Date, timeZone: string) {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      day: '2-digit',
+      hour: '2-digit',
+      hourCycle: 'h23',
+      minute: '2-digit',
+      month: '2-digit',
+      timeZone,
+      year: 'numeric',
+    });
+    const values = Object.fromEntries(
+      formatter
+        .formatToParts(date)
+        .filter((part) => part.type !== 'literal')
+        .map((part) => [part.type, Number(part.value)]),
+    );
+
+    return {
+      day: values.day,
+      hour: values.hour,
+      minute: values.minute,
+      month: values.month,
+      year: values.year,
+    };
   }
 
   private parseRemindAt(value: string) {
