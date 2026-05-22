@@ -54,6 +54,7 @@ const TIME_ZONE_LABEL = '🌍 Select timezone';
 const CHANGE_TIME_ZONE_LABEL = 'Change';
 const VIEW_EVENTS_LABEL = '📅 Show all';
 const MY_GROUP_LABEL = '👥 My group';
+const ADMIN_STATS_LABEL = '📊 Stats';
 const ADD_GROUP_MEMBER_LABEL = 'Add user';
 const NEXT_LABEL = 'Only me';
 const RECIPIENTS_DONE_LABEL = 'Done';
@@ -232,6 +233,10 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       await this.replyGroupMembers(ctx);
     });
 
+    bot.hears(ADMIN_STATS_LABEL, async (ctx) => {
+      await this.replyAdminStats(ctx);
+    });
+
     bot.hears(BACK_LABEL, async (ctx) => {
       await this.showMainMenu(ctx);
     });
@@ -384,7 +389,10 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
 
   private async showMainMenu(ctx: Context) {
     const timezone = await this.usersService.getTimeZone(String(ctx.from!.id));
-    let timeZoneButton = [TIME_ZONE_LABEL];
+    const adminStatsButton = this.isAdmin(String(ctx.from!.id))
+      ? [[ADMIN_STATS_LABEL]]
+      : [];
+    const timeZoneButton = [TIME_ZONE_LABEL];
     if (timezone) {
       timeZoneButton[0] = `Timezone: ${timezone}`;
       timeZoneButton.push(CHANGE_TIME_ZONE_LABEL);
@@ -395,9 +403,48 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       Markup.keyboard([
         [CREATE_EVENT_LABEL, VIEW_EVENTS_LABEL],
         [MY_GROUP_LABEL],
+        ...adminStatsButton,
         timeZoneButton,
       ]).resize(),
     );
+  }
+
+  private async replyAdminStats(ctx: Context) {
+    if (!ctx.from || !this.isAdmin(String(ctx.from.id))) {
+      await ctx.reply('Admin only');
+      return;
+    }
+
+    const adminTelegramIds = this.getAdminTelegramIds();
+    const [usersCount, reminderStats] = await Promise.all([
+      this.usersService.count(),
+      this.remindersService.getNonAdminStats(adminTelegramIds),
+    ]);
+
+    await ctx.reply(
+      [
+        'Admin stats',
+        '',
+        `Users: ${usersCount}`,
+        `Last reminder created: ${
+          reminderStats.lastCreatedAt
+            ? this.formatDateTime(reminderStats.lastCreatedAt)
+            : 'none'
+        }`,
+        `Active reminders: ${reminderStats.activeRemindersCount}`,
+      ].join('\n'),
+    );
+  }
+
+  private isAdmin(telegramId: string) {
+    return this.getAdminTelegramIds().includes(telegramId);
+  }
+
+  private getAdminTelegramIds() {
+    return (process.env.TELEGRAM_ADMIN_IDS ?? '')
+      .split(',')
+      .map((telegramId) => telegramId.trim())
+      .filter(Boolean);
   }
 
   private async selectTimeZone(ctx: Context) {

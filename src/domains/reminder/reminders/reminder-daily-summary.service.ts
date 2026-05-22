@@ -65,11 +65,11 @@ export class ReminderDailySummaryService {
     timeZone: string,
   ) {
     if (reminders.length === 0) {
-      return 'На сегодня ничего не запланировано';
+      return 'There is no reminders for today.';
     }
 
     return [
-      '<b>Напоминания на сегодня</b>',
+      '<b>Reminders for today</b>',
       '',
       ...reminders.map(
         (reminder, index) =>

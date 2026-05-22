@@ -82,6 +82,38 @@ export class RemindersService implements OnModuleDestroy {
     });
   }
 
+  async getNonAdminStats(adminTelegramIds: string[]) {
+    const activeRemindersQuery = this.remindersRepository
+      .createQueryBuilder('reminder')
+      .where('reminder.status = :status', { status: ReminderStatus.Pending });
+    const lastCreatedReminderQuery = this.remindersRepository
+      .createQueryBuilder('reminder')
+      .select(['reminder.id', 'reminder.createdAt'])
+      .orderBy('reminder.createdAt', 'DESC')
+      .take(1);
+
+    if (adminTelegramIds.length > 0) {
+      activeRemindersQuery.andWhere(
+        'reminder.userId NOT IN (:...adminTelegramIds)',
+        { adminTelegramIds },
+      );
+      lastCreatedReminderQuery.where(
+        'reminder.userId NOT IN (:...adminTelegramIds)',
+        { adminTelegramIds },
+      );
+    }
+
+    const [activeRemindersCount, lastCreatedReminder] = await Promise.all([
+      activeRemindersQuery.getCount(),
+      lastCreatedReminderQuery.getOne(),
+    ]);
+
+    return {
+      activeRemindersCount,
+      lastCreatedAt: lastCreatedReminder?.createdAt ?? null,
+    };
+  }
+
   async findOne(id: number) {
     const reminder = await this.remindersRepository.findOneBy({ id });
     if (!reminder) {
