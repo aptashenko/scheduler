@@ -54,6 +54,7 @@ const TIME_ZONE_LABEL = '🌍 Select timezone';
 const CHANGE_TIME_ZONE_LABEL = 'Change';
 const VIEW_EVENTS_LABEL = '📅 Show all';
 const MY_GROUP_LABEL = '👥 My group';
+const ADMIN_STATS_LABEL = '📊 Stats';
 const ADD_GROUP_MEMBER_LABEL = 'Add user';
 const NEXT_LABEL = 'Only me';
 const RECIPIENTS_DONE_LABEL = 'Done';
@@ -232,6 +233,10 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       await this.replyGroupMembers(ctx);
     });
 
+    bot.hears(ADMIN_STATS_LABEL, async (ctx) => {
+      await this.replyAdminStats(ctx);
+    });
+
     bot.hears(BACK_LABEL, async (ctx) => {
       await this.showMainMenu(ctx);
     });
@@ -384,7 +389,10 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
 
   private async showMainMenu(ctx: Context) {
     const timezone = await this.usersService.getTimeZone(String(ctx.from!.id));
-    let timeZoneButton = [TIME_ZONE_LABEL];
+    const adminStatsButton = this.isAdmin(String(ctx.from!.id))
+      ? [[ADMIN_STATS_LABEL]]
+      : [];
+    const timeZoneButton = [TIME_ZONE_LABEL];
     if (timezone) {
       timeZoneButton[0] = `Timezone: ${timezone}`;
       timeZoneButton.push(CHANGE_TIME_ZONE_LABEL);
@@ -395,9 +403,48 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       Markup.keyboard([
         [CREATE_EVENT_LABEL, VIEW_EVENTS_LABEL],
         [MY_GROUP_LABEL],
+        ...adminStatsButton,
         timeZoneButton,
       ]).resize(),
     );
+  }
+
+  private async replyAdminStats(ctx: Context) {
+    if (!ctx.from || !this.isAdmin(String(ctx.from.id))) {
+      await ctx.reply('Admin only');
+      return;
+    }
+
+    const adminTelegramIds = this.getAdminTelegramIds();
+    const [usersCount, reminderStats] = await Promise.all([
+      this.usersService.count(),
+      this.remindersService.getNonAdminStats(adminTelegramIds),
+    ]);
+
+    await ctx.reply(
+      [
+        'Admin stats',
+        '',
+        `Users: ${usersCount}`,
+        `Last reminder created: ${
+          reminderStats.lastCreatedAt
+            ? this.formatDateTime(reminderStats.lastCreatedAt)
+            : 'none'
+        }`,
+        `Active reminders: ${reminderStats.activeRemindersCount}`,
+      ].join('\n'),
+    );
+  }
+
+  private isAdmin(telegramId: string) {
+    return this.getAdminTelegramIds().includes(telegramId);
+  }
+
+  private getAdminTelegramIds() {
+    return (process.env.TELEGRAM_ADMIN_IDS ?? '')
+      .split(',')
+      .map((telegramId) => telegramId.trim())
+      .filter(Boolean);
   }
 
   private async selectTimeZone(ctx: Context) {
@@ -432,18 +479,6 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
     input: string,
     calendar: Calendar,
   ) {
-    if (!this.reminderAiService.isConfigured()) {
-      this.setWizardState(ctx.from.id, ctx.chat.id, {
-        step: 'awaiting_datetime',
-        text: input,
-      });
-      await ctx.reply(
-        'I could not recognize the date. Please select the date and time manually.',
-      );
-      calendar.startNavCalendar(ctx.message);
-      return;
-    }
-
     const timeZone = await this.getChatTimeZone(String(ctx.from.id));
     const parsed = await this.reminderParserService.parse(input, {
       timezone: timeZone,
@@ -744,6 +779,9 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
         '',
         `Reminder: ${parsed.text}`,
         `Time: ${this.formatDateTime(new Date(parsed.remindAt), timeZone)}`,
+        ...(parsed.recurrence
+          ? [`Repeat: ${this.formatRecurrence(parsed.recurrence)}`]
+          : []),
         `Also remind: ${remindBeforeMinutes} min before`,
       ].join('\n'),
       Markup.inlineKeyboard([
@@ -851,6 +889,7 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
         text: state.parsed.text,
         remindAt: state.parsed.remindAt,
         eventAt: state.parsed.remindAt,
+        recurrence: state.parsed.recurrence ?? undefined,
         remindBeforeMinutes: state.remindBeforeMinutes,
       });
       await this.notifyAddedRecipients(
@@ -1063,6 +1102,25 @@ export class ReminderBotService implements OnModuleInit, OnModuleDestroy {
       timeZone,
       year: 'numeric',
     });
+  }
+
+  private formatRecurrence(
+    recurrence: NonNullable<ReminderParseResult['recurrence']>,
+  ) {
+    if (recurrence.frequency === 'monthly') {
+      return `every month on day ${recurrence.dayOfMonth}`;
+    }
+
+    const weekdays: Record<number, string> = {
+      1: 'Monday',
+      2: 'Tuesday',
+      3: 'Wednesday',
+      4: 'Thursday',
+      5: 'Friday',
+      6: 'Saturday',
+      7: 'Sunday',
+    };
+    return `every ${weekdays[recurrence.weekday ?? 0] ?? 'week'}`;
   }
 
   private getReminderDateOptions(

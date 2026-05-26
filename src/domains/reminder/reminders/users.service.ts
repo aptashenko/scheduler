@@ -26,6 +26,10 @@ export class UsersService {
     return this.userRepository.find();
   }
 
+  count() {
+    return this.userRepository.count();
+  }
+
   async findUserById(id: string) {
     return this.userRepository.findOneByOrFail({ telegramId: id });
   }
